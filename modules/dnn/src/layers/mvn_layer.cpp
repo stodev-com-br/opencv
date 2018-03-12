@@ -43,8 +43,11 @@
 #include "../precomp.hpp"
 #include "layers_common.hpp"
 #include <opencv2/dnn/shape_utils.hpp>
-#include "math_functions.hpp"
+
+#ifdef HAVE_OPENCL
+#include "../ocl4dnn/include/math_functions.hpp"
 #include "opencl_kernels_dnn.hpp"
+#endif
 
 namespace cv
 {
@@ -65,16 +68,18 @@ public:
         relu_slope = 0.f;
     }
 
-    Ptr<BatchNormLayer> bnorm;
     Mat scale, shift;
-    UMat bnorm_weight, bnorm_bias;
     bool fuse_batch_norm;
 
-    bool setBatchNorm(const Ptr<BatchNormLayer>& layer )
+    virtual bool tryFuse(Ptr<Layer>& top)
     {
-        bnorm = layer;
-        fuse_batch_norm = !bnorm.empty() && (preferableTarget == DNN_TARGET_OPENCL);
-        return fuse_batch_norm;
+        if (preferableTarget == DNN_TARGET_OPENCL && !fuse_batch_norm)
+        {
+            top->getScaleShift(scale, shift);
+            fuse_batch_norm = !scale.empty() || !shift.empty();
+            return fuse_batch_norm;
+        }
+        return false;
     }
 
     Ptr<ReLULayer> activ_relu;
@@ -93,6 +98,63 @@ public:
     }
 
 #ifdef HAVE_OPENCL
+    bool fast_forward_ocl(std::vector<UMat> &inputs, std::vector<UMat> &outputs)
+    {
+        UMat bnorm_weight = scale.empty() ? UMat() : scale.getUMat(ACCESS_READ);
+        UMat bnorm_bias = shift.empty() ? UMat() : shift.getUMat(ACCESS_READ);
+
+        int splitDim = (acrossChannels) ? 1 : 2;
+        for (size_t inpIdx = 0; inpIdx < inputs.size(); inpIdx++)
+        {
+            UMat &inpMat = inputs[inpIdx];
+            UMat &outMat = outputs[inpIdx];
+            int newRows = total(shape(inpMat), 0, splitDim);
+
+            MatShape s = shape(newRows, inpMat.total() / newRows);
+            UMat oneMat = UMat::ones(s[1], 1, CV_32F);
+            UMat meanMat = UMat(s[0], 1, CV_32F);
+            UMat tmpMat  = UMat(s[0], s[1], CV_32F);
+            float alpha = 1.0f / s[1];
+
+            String buildopt = "-DNUM=4";
+            ocl::Kernel k("mean_fuse4", ocl::dnn::mvn_oclsrc, buildopt);
+            size_t localsize[] = { 128 };
+            size_t globalsize[] = { (size_t)s[0] / 4 * localsize[0] };
+
+            int argId = 0;
+            k.set(argId++, ocl::KernelArg::PtrReadOnly(inpMat));
+            k.set(argId++, (int)s[1]);
+            k.set(argId++, alpha);
+            k.set(argId++, ocl::KernelArg::PtrWriteOnly(meanMat));
+            k.set(argId++, ocl::KernelArg::PtrWriteOnly(tmpMat));
+            k.set(argId++, NULL, localsize[0] * sizeof(cl_float4));
+            bool ret = k.run(1, globalsize, localsize, false);
+            if (!ret)
+                return false;
+
+            buildopt += format(" %s %s", (fuse_batch_norm) ? "-DFUSE_BATCH_NORM" : "",
+                               (fuse_relu) ? "-DFUSE_RELU" : "");
+
+            ocl::Kernel k1("mvn_fuse4", ocl::dnn::mvn_oclsrc, buildopt);
+            argId = 0;
+            k1.set(argId++, ocl::KernelArg::PtrReadOnly(tmpMat));
+            k1.set(argId++, ocl::KernelArg::PtrReadOnly(inpMat));
+            k1.set(argId++, ocl::KernelArg::PtrReadOnly(meanMat));
+            k1.set(argId++, (int)s[1]);
+            k1.set(argId++, (float)alpha);
+            k1.set(argId++, (float)eps);
+            k1.set(argId++, (float)relu_slope);
+            k1.set(argId++, ocl::KernelArg::PtrReadOnly(bnorm_weight));
+            k1.set(argId++, ocl::KernelArg::PtrReadOnly(bnorm_bias));
+            k1.set(argId++, ocl::KernelArg::PtrWriteOnly(outMat));
+            k1.set(argId++, NULL, localsize[0] * sizeof(cl_float4));
+            ret = k1.run(1, globalsize, localsize, false);
+            if (!ret)
+                return false;
+        }
+        return true;
+    }
+
     bool forward_ocl(InputArrayOfArrays inputs_, OutputArrayOfArrays outputs_, OutputArrayOfArrays internals_)
     {
         std::vector<UMat> inputs;
@@ -101,22 +163,23 @@ public:
         inputs_.getUMatVector(inputs);
         outputs_.getUMatVector(outputs);
 
-        if( fuse_batch_norm && scale.empty())
+        int splitDim = (acrossChannels) ? 1 : 2;
+        int row_size = total(shape(inputs[0]), 0, splitDim);
+        int plane_size = total(shape(inputs[0]), splitDim);
+        if (normVariance && (row_size % 4 == 0) && (plane_size % 4 == 0))
         {
-            bnorm->getScaleShift(scale, shift);
-            bnorm_weight = scale.getUMat(ACCESS_READ);
-            bnorm_bias = shift.getUMat(ACCESS_READ);
+            bool ret = fast_forward_ocl(inputs, outputs);
+            return ret;
         }
+
+        UMat bnorm_weight = scale.empty() ? UMat() : scale.getUMat(ACCESS_READ);
+        UMat bnorm_bias = shift.empty() ? UMat() : shift.getUMat(ACCESS_READ);
 
         for (size_t inpIdx = 0; inpIdx < inputs.size(); inpIdx++)
         {
             UMat &inpMat = inputs[inpIdx];
             UMat &outMat = outputs[inpIdx];
-
-            int splitDim = (acrossChannels) ? 1 : 2;
-            int i, newRows = 1;
-            for( i = 0; i < splitDim; i++ )
-                newRows *= inpMat.size[i];
+            int newRows = total(shape(inpMat), 0, splitDim);
 
             MatShape s = shape(newRows, inpMat.total() / newRows);
             UMat oneMat = UMat::ones(s[1], 1, CV_32F);
@@ -207,6 +270,14 @@ public:
             int i, newRows = 1;
             for( i = 0; i < splitDim; i++ )
                 newRows *= inpBlob.size[i];
+
+            if (inpBlob.total() == newRows)
+            {
+                // MVN is applied to single values at an every row.
+                outBlob.setTo(0);
+                return;
+            }
+
             Mat inpMat = inpBlob.reshape(1, newRows);
             Mat outMat = outBlob.reshape(1, newRows);
 

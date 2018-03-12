@@ -208,7 +208,7 @@ class Builder:
         # Add extra data
         apkxmldest = check_dir(os.path.join(apkdest, "res", "xml"), create=True)
         apklibdest = check_dir(os.path.join(apkdest, "libs", abi.name), create=True)
-        for ver, d in self.extra_packs + [("3.4.0", os.path.join(self.libdest, "lib"))]:
+        for ver, d in self.extra_packs + [("3.4.1", os.path.join(self.libdest, "lib"))]:
             r = ET.Element("library", attrib={"version": ver})
             log.info("Adding libraries from %s", d)
 
@@ -298,7 +298,7 @@ if __name__ == "__main__":
     parser.add_argument('--ndk_path', help="Path to Android NDK to use for build")
     parser.add_argument('--sdk_path', help="Path to Android SDK to use for build")
     parser.add_argument("--extra_modules_path", help="Path to extra modules to use for build")
-    parser.add_argument('--sign_with', help="Sertificate to sign the Manager apk")
+    parser.add_argument('--sign_with', help="Certificate to sign the Manager apk")
     parser.add_argument('--build_doc', action="store_true", help="Build javadoc")
     parser.add_argument('--no_ccache', action="store_true", help="Do not use ccache during library build")
     parser.add_argument('--extra_pack', action='append', help="provide extra OpenCV libraries for Manager apk in form <version>:<path-to-native-libs>, for example '2.4.11:unpacked/sdk/native/libs'")

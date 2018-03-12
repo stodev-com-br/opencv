@@ -1458,7 +1458,7 @@ namespace cv
                                                   ivx::Image::createAddressing(dst.cols, dst.rows, 1, (vx_int32)(dst.step)), dst.data);
 
             //ATTENTION: VX_CONTEXT_IMMEDIATE_BORDER attribute change could lead to strange issues in multi-threaded environments
-            //since OpenVX standart says nothing about thread-safety for now
+            //since OpenVX standard says nothing about thread-safety for now
             ivx::border_t prevBorder = ctx.immediateBorder();
             ctx.setImmediateBorder(border, (vx_uint8)(0));
             ivx::IVX_CHECK_STATUS(vxuBox3x3(ctx, ia, ib));
@@ -3345,7 +3345,7 @@ static bool openvx_gaussianBlur(InputArray _src, OutputArray _dst, Size ksize,
                 ivx::Image::createAddressing(dst.cols, dst.rows, 1, (vx_int32)(dst.step)), dst.data);
 
         //ATTENTION: VX_CONTEXT_IMMEDIATE_BORDER attribute change could lead to strange issues in multi-threaded environments
-        //since OpenVX standart says nothing about thread-safety for now
+        //since OpenVX standard says nothing about thread-safety for now
         ivx::border_t prevBorder = ctx.immediateBorder();
         ctx.setImmediateBorder(border, (vx_uint8)(0));
         ivx::IVX_CHECK_STATUS(vxuGaussian3x3(ctx, ia, ib));
@@ -4416,7 +4416,7 @@ namespace cv
                     ivx::Image::createAddressing(dst.cols, dst.rows, 1, (vx_int32)(dst.step)), dst.data);
 
             //ATTENTION: VX_CONTEXT_IMMEDIATE_BORDER attribute change could lead to strange issues in multi-threaded environments
-            //since OpenVX standart says nothing about thread-safety for now
+            //since OpenVX standard says nothing about thread-safety for now
             ivx::border_t prevBorder = ctx.immediateBorder();
             ctx.setImmediateBorder(VX_BORDER_REPLICATE);
 #ifdef VX_VERSION_1_1
@@ -4674,11 +4674,17 @@ public:
                                 color_weight[buf[2]],
                                 color_weight[buf[3]]);
                             v_float32x4 _sw = v_load(space_weight+k);
+#if defined(_MSC_VER) && _MSC_VER == 1700/* MSVS 2012 */ && CV_AVX
+                            // details: https://github.com/opencv/opencv/issues/11004
+                            vsumw += _cw * _sw;
+                            vsumc += _cw * _sw * _valF;
+#else
                             v_float32x4 _w = _cw * _sw;
                             _cw = _w * _valF;
 
                             vsumw += _w;
                             vsumc += _cw;
+#endif
                         }
                         float *bufFloat = (float*)buf;
                         v_float32x4 sum4 = v_reduce_sum4(vsumw, vsumc, vsumw, vsumc);
@@ -4743,6 +4749,13 @@ public:
                                                     color_weight[buf[2]],color_weight[buf[3]]);
                             v_float32x4 _sw = v_load(space_weight+k);
 
+#if defined(_MSC_VER) && _MSC_VER == 1700/* MSVS 2012 */ && CV_AVX
+                            // details: https://github.com/opencv/opencv/issues/11004
+                            vsumw += _w * _sw;
+                            vsumb += _w * _sw * _b;
+                            vsumg += _w * _sw * _g;
+                            vsumr += _w * _sw * _r;
+#else
                             _w *= _sw;
                             _b *=  _w;
                             _g *=  _w;
@@ -4752,6 +4765,7 @@ public:
                             vsumb += _b;
                             vsumg += _g;
                             vsumr += _r;
+#endif
                         }
                         float *bufFloat = (float*)buf;
                         v_float32x4 sum4 = v_reduce_sum4(vsumw, vsumb, vsumg, vsumr);

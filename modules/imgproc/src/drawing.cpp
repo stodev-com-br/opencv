@@ -40,8 +40,6 @@
 //M*/
 #include "precomp.hpp"
 
-#include <stdint.h>
-
 namespace cv
 {
 
@@ -1395,7 +1393,7 @@ FillEdgeCollection( Mat& img, std::vector<PolyEdge>& edges, const void* color )
         {
             if( last && last->y1 == y )
             {
-                // exclude edge if y reachs its lower point
+                // exclude edge if y reaches its lower point
                 prelast->next = last->next;
                 last = last->next;
                 continue;
@@ -1409,7 +1407,7 @@ FillEdgeCollection( Mat& img, std::vector<PolyEdge>& edges, const void* color )
             }
             else if( i < total )
             {
-                // insert new edge into active list if y reachs its upper point
+                // insert new edge into active list if y reaches its upper point
                 prelast->next = e;
                 e->next = last;
                 prelast = e;
@@ -1814,7 +1812,7 @@ void line( InputOutputArray _img, Point pt1, Point pt2, const Scalar& color,
     if( line_type == CV_AA && img.depth() != CV_8U )
         line_type = 8;
 
-    CV_Assert( 0 <= thickness && thickness <= MAX_THICKNESS );
+    CV_Assert( 0 < thickness && thickness <= MAX_THICKNESS );
     CV_Assert( 0 <= shift && shift <= XY_SHIFT );
 
     double buf[4];
