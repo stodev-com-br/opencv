@@ -124,7 +124,7 @@ public:
     /*!
      \return the error description and the context as a text string.
     */
-    virtual const char *what() const throw();
+    virtual const char *what() const throw() CV_OVERRIDE;
     void formatMessage();
 
     String msg; ///< the formatted error message
@@ -219,8 +219,7 @@ enum LineTypes {
     LINE_AA = 16 //!< antialiased line
 };
 
-//! Only a subset of Hershey fonts
-//! <http://sources.isc.org/utils/misc/hershey-font.txt> are supported
+//! Only a subset of Hershey fonts <https://en.wikipedia.org/wiki/Hershey_fonts> are supported
 enum HersheyFonts {
     FONT_HERSHEY_SIMPLEX        = 0, //!< normal size sans-serif font
     FONT_HERSHEY_PLAIN          = 1, //!< small size sans-serif font
@@ -3159,7 +3158,7 @@ protected:
 
 struct Param {
     enum { INT=0, BOOLEAN=1, REAL=2, STRING=3, MAT=4, MAT_VECTOR=5, ALGORITHM=6, FLOAT=7,
-           UNSIGNED_INT=8, UINT64=9, UCHAR=11 };
+           UNSIGNED_INT=8, UINT64=9, UCHAR=11, SCALAR=12 };
 };
 
 
@@ -3250,6 +3249,14 @@ template<> struct ParamType<uchar>
     typedef uchar member_type;
 
     enum { type = Param::UCHAR };
+};
+
+template<> struct ParamType<Scalar>
+{
+    typedef const Scalar& const_param_type;
+    typedef Scalar member_type;
+
+    enum { type = Param::SCALAR };
 };
 
 //! @} core_basic

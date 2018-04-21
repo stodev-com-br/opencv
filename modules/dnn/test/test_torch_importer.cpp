@@ -103,7 +103,7 @@ typedef testing::TestWithParam<DNNTarget> Test_Torch_layers;
 
 TEST_P(Test_Torch_layers, run_convolution)
 {
-    runTorchNet("net_conv", GetParam());
+    runTorchNet("net_conv", GetParam(), "", false, true);
 }
 
 TEST_P(Test_Torch_layers, run_pool_max)
@@ -318,6 +318,11 @@ TEST(Torch_Importer, run_paralel)
 TEST(Torch_Importer, DISABLED_run_paralel)
 {
     runTorchNet("net_parallel", DNN_TARGET_OPENCL, "l5_torchMerge");
+}
+
+TEST(Torch_Importer, net_residual)
+{
+    runTorchNet("net_residual", DNN_TARGET_CPU, "", false, true);
 }
 
 }

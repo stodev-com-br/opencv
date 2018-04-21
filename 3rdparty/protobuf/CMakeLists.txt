@@ -20,6 +20,7 @@ else()
                                        -Wundef -Wtautological-undefined-compare -Wignored-qualifiers -Wextra
                                        -Wunused-function -Wunused-const-variable -Wshorten-64-to-32 -Wno-invalid-offsetof
                                        -Wenum-compare-switch
+                                       -Wsuggest-override -Winconsistent-missing-override
   )
 endif()
 if(CV_ICC)
@@ -141,6 +142,8 @@ set_target_properties(libprotobuf
     FOLDER "3rdparty"
     OUTPUT_NAME libprotobuf
     DEBUG_POSTFIX "${OPENCV_DEBUG_POSTFIX}"
+    COMPILE_PDB_NAME libprotobuf
+    COMPILE_PDB_NAME_DEBUG "libprotobuf${OPENCV_DEBUG_POSTFIX}"
     ARCHIVE_OUTPUT_DIRECTORY ${3P_LIBRARY_OUTPUT_PATH}
     )
 

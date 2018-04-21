@@ -47,6 +47,8 @@
 #include <opencv2/core/utils/configuration.private.hpp>
 #include <opencv2/core/utils/trace.private.hpp>
 
+#include <opencv2/core/utils/logger.hpp>
+
 namespace cv {
 
 static Mutex* __initialization_mutex = NULL;
@@ -247,10 +249,34 @@ const char* Exception::what() const throw() { return msg.c_str(); }
 
 void Exception::formatMessage()
 {
-    if( func.size() > 0 )
-        msg = format("OpenCV(%s) %s:%d: error: (%d) %s: %s in function %s\n", CV_VERSION, file.c_str(), line, code, cvErrorStr(code), err.c_str(), func.c_str());
+    size_t pos = err.find('\n');
+    bool multiline = pos != cv::String::npos;
+    if (multiline)
+    {
+        std::stringstream ss;
+        size_t prev_pos = 0;
+        while (pos != cv::String::npos)
+        {
+           ss << "> " << err.substr(prev_pos, pos - prev_pos) << std::endl;
+           prev_pos = pos + 1;
+           pos = err.find('\n', prev_pos);
+        }
+        ss << "> " << err.substr(prev_pos);
+        if (err[err.size() - 1] != '\n')
+            ss << std::endl;
+        err = ss.str();
+    }
+    if (func.size() > 0)
+    {
+        if (multiline)
+            msg = format("OpenCV(%s) %s:%d: error: (%d:%s) in function '%s'\n%s", CV_VERSION, file.c_str(), line, code, cvErrorStr(code), func.c_str(), err.c_str());
+        else
+            msg = format("OpenCV(%s) %s:%d: error: (%d:%s) %s in function '%s'\n", CV_VERSION, file.c_str(), line, code, cvErrorStr(code), err.c_str(), func.c_str());
+    }
     else
-        msg = format("OpenCV(%s) %s:%d: error: (%d) %s: %s\n", CV_VERSION, file.c_str(), line, code, cvErrorStr(code), err.c_str());
+    {
+        msg = format("OpenCV(%s) %s:%d: error: (%d:%s) %s%s", CV_VERSION, file.c_str(), line, code, cvErrorStr(code), err.c_str(), multiline ? "" : "\n");
+    }
 }
 
 static const char* g_hwFeatureNames[CV_HARDWARE_MAX_FEATURE] = { NULL };
@@ -412,24 +438,24 @@ struct HWFeatures
         have[CV_CPU_FP16] = true;
     #elif defined __arm__ && defined __ANDROID__
       #if defined HAVE_CPUFEATURES
-        __android_log_print(ANDROID_LOG_INFO, "OpenCV", "calling android_getCpuFeatures() ...");
+        CV_LOG_INFO(NULL, "calling android_getCpuFeatures() ...");
         uint64_t features = android_getCpuFeatures();
-        __android_log_print(ANDROID_LOG_INFO, "OpenCV", "calling android_getCpuFeatures() ... Done (%llx)", features);
+        CV_LOG_INFO(NULL, cv::format("calling android_getCpuFeatures() ... Done (%llx)", (long long)features));
         have[CV_CPU_NEON] = (features & ANDROID_CPU_ARM_FEATURE_NEON) != 0;
         have[CV_CPU_FP16] = (features & ANDROID_CPU_ARM_FEATURE_VFP_FP16) != 0;
       #else
-        __android_log_print(ANDROID_LOG_INFO, "OpenCV", "cpufeatures library is not available for CPU detection");
+        CV_LOG_INFO(NULL, "cpufeatures library is not available for CPU detection");
         #if CV_NEON
-        __android_log_print(ANDROID_LOG_INFO, "OpenCV", "- NEON instructions is enabled via build flags");
+        CV_LOG_INFO(NULL, "- NEON instructions is enabled via build flags");
         have[CV_CPU_NEON] = true;
         #else
-        __android_log_print(ANDROID_LOG_INFO, "OpenCV", "- NEON instructions is NOT enabled via build flags");
+        CV_LOG_INFO(NULL, "- NEON instructions is NOT enabled via build flags");
         #endif
         #if CV_FP16
-        __android_log_print(ANDROID_LOG_INFO, "OpenCV", "- FP16 instructions is enabled via build flags");
+        CV_LOG_INFO(NULL, "- FP16 instructions is enabled via build flags");
         have[CV_CPU_FP16] = true;
         #else
-        __android_log_print(ANDROID_LOG_INFO, "OpenCV", "- FP16 instructions is NOT enabled via build flags");
+        CV_LOG_INFO(NULL, "- FP16 instructions is NOT enabled via build flags");
         #endif
       #endif
     #elif defined __arm__
@@ -617,9 +643,6 @@ void setUseOptimized( bool flag )
 #ifdef HAVE_OPENCL
     ocl::setUseOpenCL(flag);
 #endif
-#ifdef HAVE_TEGRA_OPTIMIZATION
-    ::tegra::setUseTegra(flag);
-#endif
 }
 
 bool useOptimized(void)
@@ -742,6 +765,14 @@ const String& getBuildInformation()
     ;
     return build_info;
 }
+
+String getVersionString() { return String(CV_VERSION); }
+
+int getVersionMajor() { return CV_VERSION_MAJOR; }
+
+int getVersionMinor() { return CV_VERSION_MINOR; }
+
+int getVersionRevision() { return CV_VERSION_REVISION; }
 
 String format( const char* fmt, ... )
 {
@@ -1094,93 +1125,6 @@ cvErrorFromIppStatus( int status )
 
 namespace cv {
 bool __termination = false;
-}
-
-namespace cv
-{
-
-#if defined _WIN32 || defined WINCE
-
-struct Mutex::Impl
-{
-    Impl()
-    {
-#if (_WIN32_WINNT >= 0x0600)
-        ::InitializeCriticalSectionEx(&cs, 1000, 0);
-#else
-        ::InitializeCriticalSection(&cs);
-#endif
-        refcount = 1;
-    }
-    ~Impl() { DeleteCriticalSection(&cs); }
-
-    void lock() { EnterCriticalSection(&cs); }
-    bool trylock() { return TryEnterCriticalSection(&cs) != 0; }
-    void unlock() { LeaveCriticalSection(&cs); }
-
-    CRITICAL_SECTION cs;
-    int refcount;
-};
-
-#else
-
-struct Mutex::Impl
-{
-    Impl()
-    {
-        pthread_mutexattr_t attr;
-        pthread_mutexattr_init(&attr);
-        pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
-        pthread_mutex_init(&mt, &attr);
-        pthread_mutexattr_destroy(&attr);
-
-        refcount = 1;
-    }
-    ~Impl() { pthread_mutex_destroy(&mt); }
-
-    void lock() { pthread_mutex_lock(&mt); }
-    bool trylock() { return pthread_mutex_trylock(&mt) == 0; }
-    void unlock() { pthread_mutex_unlock(&mt); }
-
-    pthread_mutex_t mt;
-    int refcount;
-};
-
-#endif
-
-Mutex::Mutex()
-{
-    impl = new Mutex::Impl;
-}
-
-Mutex::~Mutex()
-{
-    if( CV_XADD(&impl->refcount, -1) == 1 )
-        delete impl;
-    impl = 0;
-}
-
-Mutex::Mutex(const Mutex& m)
-{
-    impl = m.impl;
-    CV_XADD(&impl->refcount, 1);
-}
-
-Mutex& Mutex::operator = (const Mutex& m)
-{
-    if (this != &m)
-    {
-        CV_XADD(&m.impl->refcount, 1);
-        if( CV_XADD(&impl->refcount, -1) == 1 )
-            delete impl;
-        impl = m.impl;
-    }
-    return *this;
-}
-
-void Mutex::lock() { impl->lock(); }
-void Mutex::unlock() { impl->unlock(); }
-bool Mutex::trylock() { return impl->trylock(); }
 
 
 //////////////////////////////// thread-local storage ////////////////////////////////
@@ -2013,18 +1957,10 @@ static IPPInitSingleton& getIPPSingleton()
 }
 #endif
 
-#if OPENCV_ABI_COMPATIBILITY > 300
 unsigned long long getIppFeatures()
-#else
-int getIppFeatures()
-#endif
 {
 #ifdef HAVE_IPP
-#if OPENCV_ABI_COMPATIBILITY > 300
     return getIPPSingleton().ippFeatures;
-#else
-    return (int)getIPPSingleton().ippFeatures;
-#endif
 #else
     return 0;
 #endif
@@ -2137,35 +2073,5 @@ void setUseIPP_NE(bool flag)
 } // namespace ipp
 
 } // namespace cv
-
-#ifdef HAVE_TEGRA_OPTIMIZATION
-
-namespace tegra {
-
-bool useTegra()
-{
-    cv::CoreTLSData* data = cv::getCoreTlsData().get();
-
-    if (data->useTegra < 0)
-    {
-        const char* pTegraEnv = getenv("OPENCV_TEGRA");
-        if (pTegraEnv && (cv::String(pTegraEnv) == "disabled"))
-            data->useTegra = false;
-        else
-            data->useTegra = true;
-    }
-
-    return (data->useTegra > 0);
-}
-
-void setUseTegra(bool flag)
-{
-    cv::CoreTLSData* data = cv::getCoreTlsData().get();
-    data->useTegra = flag;
-}
-
-} // namespace tegra
-
-#endif
 
 /* End of file. */

@@ -547,7 +547,7 @@ static bool ocl_Laplacian5(InputArray _src, OutputArray _dst,
     size_t src_step = _src.step(), src_offset = _src.offset();
     const size_t tileSizeYmax = wgs / tileSizeX;
 
-    // workaround for Nvidia: 3 channel vector type takes 4*elem_size in local memory
+    // workaround for NVIDIA: 3 channel vector type takes 4*elem_size in local memory
     int loc_mem_cn = dev.vendorID() == ocl::Device::VENDOR_NVIDIA && cn == 3 ? 4 : cn;
 
     if (((src_offset % src_step) % esz == 0) &&
@@ -807,20 +807,6 @@ void cv::Laplacian( InputArray _src, OutputArray _dst, int ddepth, int ksize,
     }
 
     CV_IPP_RUN(!(cv::ocl::isOpenCLActivated() && _dst.isUMat()), ipp_Laplacian(_src, _dst, ksize, scale, delta, borderType));
-
-
-#ifdef HAVE_TEGRA_OPTIMIZATION
-    if (tegra::useTegra() && scale == 1.0 && delta == 0)
-    {
-        Mat src = _src.getMat(), dst = _dst.getMat();
-        if (ksize == 1 && tegra::laplace1(src, dst, borderType))
-            return;
-        if (ksize == 3 && tegra::laplace3(src, dst, borderType))
-            return;
-        if (ksize == 5 && tegra::laplace5(src, dst, borderType))
-            return;
-    }
-#endif
 
     if( ksize == 1 || ksize == 3 )
     {

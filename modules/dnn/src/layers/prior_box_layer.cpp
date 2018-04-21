@@ -42,7 +42,7 @@
 
 #include "../precomp.hpp"
 #include "layers_common.hpp"
-#include "op_inf_engine.hpp"
+#include "../op_inf_engine.hpp"
 #include <float.h>
 #include <algorithm>
 #include <cmath>
@@ -56,7 +56,7 @@ namespace cv
 namespace dnn
 {
 
-class PriorBoxLayerImpl : public PriorBoxLayer
+class PriorBoxLayerImpl CV_FINAL : public PriorBoxLayer
 {
 public:
     static bool getParameterDict(const LayerParams &params,
@@ -109,15 +109,11 @@ public:
         for (int i = 0; i < aspectRatioParameter.size(); ++i)
         {
             float aspectRatio = aspectRatioParameter.get<float>(i);
-            bool alreadyExists = false;
+            bool alreadyExists = fabs(aspectRatio - 1.f) < 1e-6f;
 
-            for (size_t j = 0; j < _aspectRatios.size(); ++j)
+            for (size_t j = 0; j < _aspectRatios.size() && !alreadyExists; ++j)
             {
-                if (fabs(aspectRatio - _aspectRatios[j]) < 1e-6)
-                {
-                    alreadyExists = true;
-                    break;
-                }
+                alreadyExists = fabs(aspectRatio - _aspectRatios[j]) < 1e-6;
             }
             if (!alreadyExists)
             {
@@ -215,7 +211,7 @@ public:
         }
         else
         {
-            CV_Assert(!_aspectRatios.empty(), _minSize > 0);
+            CV_Assert(_minSize > 0);
             _boxWidths.resize(1 + (_maxSize > 0 ? 1 : 0) + _aspectRatios.size());
             _boxHeights.resize(_boxWidths.size());
             _boxWidths[0] = _boxHeights[0] = _minSize;
@@ -270,7 +266,7 @@ public:
         }
     }
 
-    virtual bool supportBackend(int backendId)
+    virtual bool supportBackend(int backendId) CV_OVERRIDE
     {
         return backendId == DNN_BACKEND_DEFAULT ||
                backendId == DNN_BACKEND_INFERENCE_ENGINE && haveInfEngine() && !_explicitSizes;
@@ -279,7 +275,7 @@ public:
     bool getMemoryShapes(const std::vector<MatShape> &inputs,
                          const int requiredOutputs,
                          std::vector<MatShape> &outputs,
-                         std::vector<MatShape> &internals) const
+                         std::vector<MatShape> &internals) const CV_OVERRIDE
     {
         CV_Assert(!inputs.empty());
 
@@ -389,7 +385,7 @@ public:
     }
 #endif
 
-    void forward(InputArrayOfArrays inputs_arr, OutputArrayOfArrays outputs_arr, OutputArrayOfArrays internals_arr)
+    void forward(InputArrayOfArrays inputs_arr, OutputArrayOfArrays outputs_arr, OutputArrayOfArrays internals_arr) CV_OVERRIDE
     {
         CV_TRACE_FUNCTION();
         CV_TRACE_ARG_VALUE(name, "name", name.c_str());
@@ -401,7 +397,7 @@ public:
         Layer::forward_fallback(inputs_arr, outputs_arr, internals_arr);
     }
 
-    void forward(std::vector<Mat*> &inputs, std::vector<Mat> &outputs, std::vector<Mat> &internals)
+    void forward(std::vector<Mat*> &inputs, std::vector<Mat> &outputs, std::vector<Mat> &internals) CV_OVERRIDE
     {
         CV_TRACE_FUNCTION();
         CV_TRACE_ARG_VALUE(name, "name", name.c_str());
@@ -422,8 +418,6 @@ public:
           stepX = _stepX;
           stepY = _stepY;
         }
-
-        int _outChannelSize = _layerHeight * _layerWidth * _numPriors * 4;
 
         float* outputPtr = outputs[0].ptr<float>();
         float _boxWidth, _boxHeight;
@@ -448,6 +442,8 @@ public:
         // clip the prior's coordidate such that it is within [0, 1]
         if (_clip)
         {
+            int _outChannelSize = _layerHeight * _layerWidth * _numPriors * 4;
+            outputPtr = outputs[0].ptr<float>();
             for (size_t d = 0; d < _outChannelSize; ++d)
             {
                 outputPtr[d] = std::min<float>(std::max<float>(outputPtr[d], 0.), 1.);
@@ -480,7 +476,7 @@ public:
         }
     }
 
-    virtual Ptr<BackendNode> initInfEngine(const std::vector<Ptr<BackendWrapper> >&)
+    virtual Ptr<BackendNode> initInfEngine(const std::vector<Ptr<BackendWrapper> >&) CV_OVERRIDE
     {
 #ifdef HAVE_INF_ENGINE
         InferenceEngine::LayerParams lp;
@@ -492,10 +488,12 @@ public:
         ieLayer->params["min_size"] = format("%f", _minSize);
         ieLayer->params["max_size"] = _maxSize > 0 ? format("%f", _maxSize) : "";
 
-        CV_Assert(!_aspectRatios.empty());
-        ieLayer->params["aspect_ratio"] = format("%f", _aspectRatios[0]);
-        for (int i = 1; i < _aspectRatios.size(); ++i)
-            ieLayer->params["aspect_ratio"] += format(",%f", _aspectRatios[i]);
+        if (!_aspectRatios.empty())
+        {
+            ieLayer->params["aspect_ratio"] = format("%f", _aspectRatios[0]);
+            for (int i = 1; i < _aspectRatios.size(); ++i)
+                ieLayer->params["aspect_ratio"] += format(",%f", _aspectRatios[i]);
+        }
 
         ieLayer->params["flip"] = _flip ? "1" : "0";
         ieLayer->params["clip"] = _clip ? "1" : "0";
@@ -518,7 +516,7 @@ public:
     }
 
     virtual int64 getFLOPS(const std::vector<MatShape> &inputs,
-                           const std::vector<MatShape> &outputs) const
+                           const std::vector<MatShape> &outputs) const CV_OVERRIDE
     {
         (void)outputs; // suppress unused variable warning
         long flops = 0;

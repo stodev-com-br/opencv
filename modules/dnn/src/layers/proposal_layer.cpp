@@ -9,7 +9,7 @@
 
 namespace cv { namespace dnn {
 
-class ProposalLayerImpl : public ProposalLayer
+class ProposalLayerImpl CV_FINAL : public ProposalLayer
 {
 public:
     ProposalLayerImpl(const LayerParams& params)
@@ -31,6 +31,7 @@ public:
             lp.set("flip", false);
             lp.set("clip", false);
             lp.set("normalized_bbox", false);
+            lp.set("offset", 0.5 * baseSize / featStride);
 
             // Unused values.
             float variance[] = {0.1f, 0.1f, 0.2f, 0.2f};
@@ -85,7 +86,7 @@ public:
     bool getMemoryShapes(const std::vector<MatShape> &inputs,
                          const int requiredOutputs,
                          std::vector<MatShape> &outputs,
-                         std::vector<MatShape> &internals) const
+                         std::vector<MatShape> &internals) const CV_OVERRIDE
     {
         // We need to allocate the following blobs:
         // - output priors from PriorBoxLayer
@@ -123,11 +124,13 @@ public:
         CV_Assert(layerInternals.empty());
         internals.push_back(layerOutputs[0]);
 
-        outputs.resize(1, shape(keepTopAfterNMS, 5));
+        outputs.resize(2);
+        outputs[0] = shape(keepTopAfterNMS, 5);
+        outputs[1] = shape(keepTopAfterNMS, 1);
         return false;
     }
 
-    void finalize(const std::vector<Mat*> &inputs, std::vector<Mat> &outputs)
+    void finalize(const std::vector<Mat*> &inputs, std::vector<Mat> &outputs) CV_OVERRIDE
     {
         std::vector<Mat*> layerInputs;
         std::vector<Mat> layerOutputs;
@@ -210,19 +213,26 @@ public:
         CV_Assert(numDets <= keepTopAfterNMS);
 
         MatShape s = shape(numDets, 7);
-        UMat src = layerOutputs[0].reshape(1, s.size(), &s[0]).colRange(3, 7);
+        layerOutputs[0] = layerOutputs[0].reshape(1, s.size(), &s[0]);
+
+        // The boxes.
         UMat dst = outputs[0].rowRange(0, numDets);
-        src.copyTo(dst.colRange(1, 5));
+        layerOutputs[0].colRange(3, 7).copyTo(dst.colRange(1, 5));
         dst.col(0).setTo(0);  // First column are batch ids. Keep it zeros too.
 
+        // The scores.
+        dst = outputs[1].rowRange(0, numDets);
+        layerOutputs[0].col(2).copyTo(dst);
+
         if (numDets < keepTopAfterNMS)
-            outputs[0].rowRange(numDets, keepTopAfterNMS).setTo(0);
+            for (int i = 0; i < 2; ++i)
+                outputs[i].rowRange(numDets, keepTopAfterNMS).setTo(0);
 
         return true;
     }
 #endif
 
-    void forward(InputArrayOfArrays inputs_arr, OutputArrayOfArrays outputs_arr, OutputArrayOfArrays internals_arr)
+    void forward(InputArrayOfArrays inputs_arr, OutputArrayOfArrays outputs_arr, OutputArrayOfArrays internals_arr) CV_OVERRIDE
     {
         CV_TRACE_FUNCTION();
         CV_TRACE_ARG_VALUE(name, "name", name.c_str());
@@ -234,7 +244,7 @@ public:
         Layer::forward_fallback(inputs_arr, outputs_arr, internals_arr);
     }
 
-    void forward(std::vector<Mat*> &inputs, std::vector<Mat> &outputs, std::vector<Mat> &internals)
+    void forward(std::vector<Mat*> &inputs, std::vector<Mat> &outputs, std::vector<Mat> &internals) CV_OVERRIDE
     {
         CV_TRACE_FUNCTION();
         CV_TRACE_ARG_VALUE(name, "name", name.c_str());
@@ -284,13 +294,19 @@ public:
         const int numDets = layerOutputs[0].total() / 7;
         CV_Assert(numDets <= keepTopAfterNMS);
 
-        Mat src = layerOutputs[0].reshape(1, numDets).colRange(3, 7);
+        // The boxes.
+        layerOutputs[0] = layerOutputs[0].reshape(1, numDets);
         Mat dst = outputs[0].rowRange(0, numDets);
-        src.copyTo(dst.colRange(1, 5));
+        layerOutputs[0].colRange(3, 7).copyTo(dst.colRange(1, 5));
         dst.col(0).setTo(0);  // First column are batch ids. Keep it zeros too.
 
+        // The scores.
+        dst = outputs[1].rowRange(0, numDets);
+        layerOutputs[0].col(2).copyTo(dst);
+
         if (numDets < keepTopAfterNMS)
-            outputs[0].rowRange(numDets, keepTopAfterNMS).setTo(0);
+            for (int i = 0; i < 2; ++i)
+                outputs[i].rowRange(numDets, keepTopAfterNMS).setTo(0);
     }
 
 private:

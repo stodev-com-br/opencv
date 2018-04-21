@@ -252,6 +252,11 @@ TEST(Layer_Test_BatchNorm, Accuracy)
     testLayerUsingCaffeModels("layer_batch_norm", DNN_TARGET_CPU, true);
 }
 
+TEST(Layer_Test_BatchNorm, local_stats)
+{
+    testLayerUsingCaffeModels("layer_batch_norm_local_stats", DNN_TARGET_CPU, true, false);
+}
+
 TEST(Layer_Test_ReLU, Accuracy)
 {
     testLayerUsingCaffeModels("layer_relu");
@@ -597,54 +602,36 @@ TEST(Layer_Test_ROIPooling, Accuracy)
     normAssert(out, ref);
 }
 
-TEST(Layer_Test_FasterRCNN_Proposal, Accuracy)
+typedef testing::TestWithParam<DNNTarget> Test_Caffe_layers;
+TEST_P(Test_Caffe_layers, FasterRCNN_Proposal)
 {
     Net net = readNetFromCaffe(_tf("net_faster_rcnn_proposal.prototxt"));
+    net.setPreferableTarget(GetParam());
 
     Mat scores = blobFromNPY(_tf("net_faster_rcnn_proposal.scores.npy"));
     Mat deltas = blobFromNPY(_tf("net_faster_rcnn_proposal.deltas.npy"));
     Mat imInfo = (Mat_<float>(1, 3) << 600, 800, 1.6f);
-    Mat ref = blobFromNPY(_tf("net_faster_rcnn_proposal.npy"));
 
     net.setInput(scores, "rpn_cls_prob_reshape");
     net.setInput(deltas, "rpn_bbox_pred");
     net.setInput(imInfo, "im_info");
 
-    Mat out = net.forward();
+    std::vector<Mat> outs;
+    net.forward(outs, "output");
 
-    const int numDets = ref.size[0];
-    EXPECT_LE(numDets, out.size[0]);
-    normAssert(out.rowRange(0, numDets), ref);
+    for (int i = 0; i < 2; ++i)
+    {
+        Mat ref = blobFromNPY(_tf(i == 0 ? "net_faster_rcnn_proposal.out_rois.npy" :
+                                           "net_faster_rcnn_proposal.out_scores.npy"));
+        const int numDets = ref.size[0];
+        EXPECT_LE(numDets, outs[i].size[0]);
+        normAssert(outs[i].rowRange(0, numDets), ref);
 
-    if (numDets < out.size[0])
-        EXPECT_EQ(countNonZero(out.rowRange(numDets, out.size[0])), 0);
+        if (numDets < outs[i].size[0])
+            EXPECT_EQ(countNonZero(outs[i].rowRange(numDets, outs[i].size[0])), 0);
+    }
 }
-
-OCL_TEST(Layer_Test_FasterRCNN_Proposal, Accuracy)
-{
-    Net net = readNetFromCaffe(_tf("net_faster_rcnn_proposal.prototxt"));
-
-    net.setPreferableBackend(DNN_BACKEND_DEFAULT);
-    net.setPreferableTarget(DNN_TARGET_OPENCL);
-
-    Mat scores = blobFromNPY(_tf("net_faster_rcnn_proposal.scores.npy"));
-    Mat deltas = blobFromNPY(_tf("net_faster_rcnn_proposal.deltas.npy"));
-    Mat imInfo = (Mat_<float>(1, 3) << 600, 800, 1.6f);
-    Mat ref = blobFromNPY(_tf("net_faster_rcnn_proposal.npy"));
-
-    net.setInput(scores, "rpn_cls_prob_reshape");
-    net.setInput(deltas, "rpn_bbox_pred");
-    net.setInput(imInfo, "im_info");
-
-    Mat out = net.forward();
-
-    const int numDets = ref.size[0];
-    EXPECT_LE(numDets, out.size[0]);
-    normAssert(out.rowRange(0, numDets), ref);
-
-    if (numDets < out.size[0])
-        EXPECT_EQ(countNonZero(out.rowRange(numDets, out.size[0])), 0);
-}
+INSTANTIATE_TEST_CASE_P(/**/, Test_Caffe_layers, availableDnnTargets());
 
 typedef testing::TestWithParam<tuple<Vec4i, Vec2i, bool> > Scale_untrainable;
 TEST_P(Scale_untrainable, Accuracy)
@@ -830,5 +817,93 @@ TEST(Layer_Test_Average_pooling_kernel_area, Accuracy)
     Mat out = net.forward();
     normAssert(out, blobFromImage(target));
 }
+
+// Test PriorBoxLayer in case of no aspect ratios (just squared proposals).
+TEST(Layer_PriorBox, squares)
+{
+    LayerParams lp;
+    lp.name = "testPriorBox";
+    lp.type = "PriorBox";
+    lp.set("min_size", 2);
+    lp.set("flip", true);
+    lp.set("clip", true);
+    float variance[] = {0.1f, 0.1f, 0.2f, 0.2f};
+    float aspectRatios[] = {1.0f};  // That should be ignored.
+    lp.set("variance", DictValue::arrayReal<float*>(&variance[0], 4));
+    lp.set("aspect_ratio", DictValue::arrayReal<float*>(&aspectRatios[0], 1));
+
+    Net net;
+    int id = net.addLayerToPrev(lp.name, lp.type, lp);
+    net.connect(0, 0, id, 1);  // The second input is an input image. Shapes are used for boxes normalization.
+    Mat inp(1, 2, CV_32F);
+    randu(inp, -1, 1);
+    net.setInput(blobFromImage(inp));
+    Mat out = net.forward();
+
+    Mat target = (Mat_<float>(4, 4) << 0.0, 0.0, 0.75, 1.0,
+                                       0.25, 0.0, 1.0, 1.0,
+                                       0.1f, 0.1f, 0.2f, 0.2f,
+                                       0.1f, 0.1f, 0.2f, 0.2f);
+    normAssert(out.reshape(1, 4), target);
+}
+
+#ifdef HAVE_INF_ENGINE
+// Using Intel's Model Optimizer generate .xml and .bin files:
+// ./ModelOptimizer -w /path/to/caffemodel -d /path/to/prototxt \
+//                  -p FP32 -i -b ${batch_size} -o /path/to/output/folder
+TEST(Layer_Test_Convolution_DLDT, Accuracy)
+{
+    Net netDefault = readNet(_tf("layer_convolution.caffemodel"), _tf("layer_convolution.prototxt"));
+    Net net = readNet(_tf("layer_convolution.xml"), _tf("layer_convolution.bin"));
+
+    Mat inp = blobFromNPY(_tf("blob.npy"));
+
+    netDefault.setInput(inp);
+    Mat outDefault = netDefault.forward();
+
+    net.setInput(inp);
+    Mat out = net.forward();
+
+    normAssert(outDefault, out);
+}
+
+// 1. Create a .prototxt file with the following network:
+// layer {
+//   type: "Input" name: "data" top: "data"
+//   input_param { shape { dim: 1 dim: 2 dim: 3 } }
+// }
+// layer {
+//   type: "Input" name: "second_input" top: "second_input"
+//   input_param { shape { dim: 1 dim: 2 dim: 3 } }
+// }
+// layer {
+//  type: "Eltwise" name: "output" top: "output"
+//  bottom: "data" bottom: "second_input"
+//  eltwise_param { operation: SUM }
+// }
+//
+// 2. Create a .caffemodel file using Caffe:
+//
+// import caffe
+// net = caffe.Net('/path/to/prototxt', caffe.TEST)
+// net.save('/path/to/caffemodel')
+//
+// 3. Convert using ModelOptimizer.
+TEST(Test_DLDT, two_inputs)
+{
+    Net net = readNet(_tf("net_two_inputs.xml"), _tf("net_two_inputs.bin"));
+    int inpSize[] = {1, 2, 3};
+    Mat firstInp(3, &inpSize[0], CV_32F);
+    Mat secondInp(3, &inpSize[0], CV_32F);
+    randu(firstInp, -1, 1);
+    randu(secondInp, -1, 1);
+
+    net.setInput(firstInp, "data");
+    net.setInput(secondInp, "second_input");
+    Mat out = net.forward();
+
+    normAssert(out, firstInp + secondInp);
+}
+#endif  // HAVE_INF_ENGINE
 
 }} // namespace

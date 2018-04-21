@@ -356,7 +356,7 @@ public:
 
     parallelCanny& operator=(const parallelCanny&) { return *this; }
 
-    void operator()(const Range &boundaries) const
+    void operator()(const Range &boundaries) const CV_OVERRIDE
     {
         CV_TRACE_FUNCTION();
 
@@ -825,7 +825,7 @@ public:
 
     ~finalPass() {}
 
-    void operator()(const Range &boundaries) const
+    void operator()(const Range &boundaries) const CV_OVERRIDE
     {
         // the final pass, form the final image
         for (int i = boundaries.start; i < boundaries.end; i++)
@@ -995,11 +995,6 @@ void Canny( InputArray _src, OutputArray _dst,
             cvFloor(high_thresh),
             aperture_size,
             L2gradient ) )
-
-#ifdef HAVE_TEGRA_OPTIMIZATION
-    if (tegra::useTegra() && tegra::canny(src, dst, low_thresh, high_thresh, aperture_size, L2gradient))
-        return;
-#endif
 
     CV_IPP_RUN_FAST(ipp_Canny(src, Mat(), Mat(), dst, (float)low_thresh, (float)high_thresh, L2gradient, aperture_size))
 

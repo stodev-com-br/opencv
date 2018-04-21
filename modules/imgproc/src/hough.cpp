@@ -1077,7 +1077,7 @@ public:
 
     ~HoughCirclesAccumInvoker() { }
 
-    void operator()(const Range &boundaries) const
+    void operator()(const Range &boundaries) const CV_OVERRIDE
     {
         Mat accumLocal = Mat(arows + 2, acols + 2, CV_32SC1, Scalar::all(0));
         int *adataLocal = accumLocal.ptr<int>();
@@ -1217,7 +1217,7 @@ public:
 
     ~HoughCirclesFindCentersInvoker() {}
 
-    void operator()(const Range &boundaries) const
+    void operator()(const Range &boundaries) const CV_OVERRIDE
     {
         int startRow = boundaries.start;
         int endRow = boundaries.end;
@@ -1329,12 +1329,12 @@ public:
         CV_Assert(nzSz > 0);
     }
 
-    ~HoughCircleEstimateRadiusInvoker() {_lock.unlock();}
+    ~HoughCircleEstimateRadiusInvoker() {}
 
 protected:
     inline int filterCircles(const Point2f& curCenter, float* ddata) const;
 
-    void operator()(const Range &boundaries) const
+    void operator()(const Range &boundaries) const CV_OVERRIDE
     {
         std::vector<EstimatedCircle> circlesLocal;
         const int nBinsPerDr = 10;

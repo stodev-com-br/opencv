@@ -3,7 +3,6 @@
 
 #include "opencv2/ts.hpp"
 
-#include "ts_gtest.h"
 #include "ts_ext.hpp"
 
 #include <functional>
@@ -397,8 +396,8 @@ public:
 protected:
     virtual void PerfTestBody() = 0;
 
-    virtual void SetUp();
-    virtual void TearDown();
+    virtual void SetUp() CV_OVERRIDE;
+    virtual void TearDown() CV_OVERRIDE;
 
     bool startTimer(); // bool is dummy for conditional loop
     void stopTimer();
@@ -707,11 +706,7 @@ namespace comparators
 {
 
 template<typename T>
-#ifdef CV_CXX11
 struct RectLess_
-#else
-struct RectLess_ : public std::binary_function<cv::Rect_<T>, cv::Rect_<T>, bool>
-#endif
 {
   bool operator()(const cv::Rect_<T>& r1, const cv::Rect_<T>& r2) const
   {
@@ -724,11 +719,7 @@ struct RectLess_ : public std::binary_function<cv::Rect_<T>, cv::Rect_<T>, bool>
 
 typedef RectLess_<int> RectLess;
 
-#ifdef CV_CXX11
 struct KeypointGreater
-#else
-struct KeypointGreater : public std::binary_function<cv::KeyPoint, cv::KeyPoint, bool>
-#endif
 {
     bool operator()(const cv::KeyPoint& kp1, const cv::KeyPoint& kp2) const
     {

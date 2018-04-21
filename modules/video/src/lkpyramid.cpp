@@ -60,11 +60,6 @@ static void calcSharrDeriv(const cv::Mat& src, cv::Mat& dst)
     CV_Assert(depth == CV_8U);
     dst.create(rows, cols, CV_MAKETYPE(DataType<deriv_type>::depth, cn*2));
 
-#ifdef HAVE_TEGRA_OPTIMIZATION
-    if (tegra::useTegra() && tegra::calcSharrDeriv(src, dst))
-        return;
-#endif
-
     int x, y, delta = (int)alignSize((cols + 2)*cn, 16);
     AutoBuffer<deriv_type> _tempBuf(delta*2 + 64);
     deriv_type *trow0 = alignPtr(_tempBuf + cn, 16), *trow1 = alignPtr(trow0 + delta, 16);
@@ -819,25 +814,25 @@ namespace
         {
         }
 
-        virtual Size getWinSize() const {return winSize;}
-        virtual void setWinSize(Size winSize_){winSize = winSize_;}
+        virtual Size getWinSize() const CV_OVERRIDE { return winSize;}
+        virtual void setWinSize(Size winSize_) CV_OVERRIDE { winSize = winSize_;}
 
-        virtual int getMaxLevel() const {return maxLevel;}
-        virtual void setMaxLevel(int maxLevel_){maxLevel = maxLevel_;}
+        virtual int getMaxLevel() const CV_OVERRIDE { return maxLevel;}
+        virtual void setMaxLevel(int maxLevel_) CV_OVERRIDE { maxLevel = maxLevel_;}
 
-        virtual TermCriteria getTermCriteria() const {return criteria;}
-        virtual void setTermCriteria(TermCriteria& crit_){criteria=crit_;}
+        virtual TermCriteria getTermCriteria() const CV_OVERRIDE { return criteria;}
+        virtual void setTermCriteria(TermCriteria& crit_) CV_OVERRIDE { criteria=crit_;}
 
-        virtual int getFlags() const {return flags; }
-        virtual void setFlags(int flags_){flags=flags_;}
+        virtual int getFlags() const CV_OVERRIDE { return flags; }
+        virtual void setFlags(int flags_) CV_OVERRIDE { flags=flags_;}
 
-        virtual double getMinEigThreshold() const {return minEigThreshold;}
-        virtual void setMinEigThreshold(double minEigThreshold_){minEigThreshold=minEigThreshold_;}
+        virtual double getMinEigThreshold() const CV_OVERRIDE { return minEigThreshold;}
+        virtual void setMinEigThreshold(double minEigThreshold_) CV_OVERRIDE { minEigThreshold=minEigThreshold_;}
 
         virtual void calc(InputArray prevImg, InputArray nextImg,
                           InputArray prevPts, InputOutputArray nextPts,
                           OutputArray status,
-                          OutputArray err = cv::noArray());
+                          OutputArray err = cv::noArray()) CV_OVERRIDE;
 
     private:
 #ifdef HAVE_OPENCL
@@ -1378,12 +1373,7 @@ void SparsePyrLKOpticalFlowImpl::calc( InputArray _prevImg, InputArray _nextImg,
         CV_Assert(prevPyr[level * lvlStep1].size() == nextPyr[level * lvlStep2].size());
         CV_Assert(prevPyr[level * lvlStep1].type() == nextPyr[level * lvlStep2].type());
 
-#ifdef HAVE_TEGRA_OPTIMIZATION
-        typedef tegra::LKTrackerInvoker<cv::detail::LKTrackerInvoker> LKTrackerInvoker;
-#else
         typedef cv::detail::LKTrackerInvoker LKTrackerInvoker;
-#endif
-
         parallel_for_(Range(0, npoints), LKTrackerInvoker(prevPyr[level * lvlStep1], derivI,
                                                           nextPyr[level * lvlStep2], prevPts, nextPts,
                                                           status, err,

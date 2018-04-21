@@ -175,7 +175,7 @@ class CV_EXPORTS_W BaseCascadeClassifier : public Algorithm
 {
 public:
     virtual ~BaseCascadeClassifier();
-    virtual bool empty() const = 0;
+    virtual bool empty() const CV_OVERRIDE = 0;
     virtual bool load( const String& filename ) = 0;
     virtual void detectMultiScale( InputArray image,
                            CV_OUT std::vector<Rect>& objects,
@@ -675,9 +675,5 @@ public:
 }
 
 #include "opencv2/objdetect/detection_based_tracker.hpp"
-
-#ifndef DISABLE_OPENCV_24_COMPATIBILITY
-#include "opencv2/objdetect/objdetect_c.h"
-#endif
 
 #endif

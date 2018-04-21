@@ -1344,8 +1344,6 @@ TEST(Core_Matx, fromMat_)
     ASSERT_EQ( cvtest::norm(a, b, NORM_INF), 0.);
 }
 
-#ifdef CV_CXX11
-
 TEST(Core_Matx, from_initializer_list)
 {
     Mat_<double> a = (Mat_<double>(2,2) << 10, 11, 12, 13);
@@ -1359,8 +1357,6 @@ TEST(Core_Mat, regression_9507)
     cv::Mat m2{m};
     EXPECT_EQ(25u, m2.total());
 }
-
-#endif // CXX11
 
 TEST(Core_InputArray, empty)
 {
@@ -1511,6 +1507,19 @@ TEST(Mat, regression_5991)
     EXPECT_EQ(0, cvtest::norm(mat, Mat(3, sz, CV_8U, Scalar(1)), NORM_INF));
 }
 
+TEST(Mat, regression_9720)
+{
+    Mat mat(1, 1, CV_32FC1);
+    mat.at<float>(0) = 1.f;
+    const float a = 0.1f;
+    Mat me1 = (Mat)(mat.mul((a / mat)));
+    Mat me2 = (Mat)(mat.mul((Mat)(a / mat)));
+    Mat me3 = (Mat)(mat.mul((a * mat)));
+    Mat me4 = (Mat)(mat.mul((Mat)(a * mat)));
+    EXPECT_EQ(me1.at<float>(0), me2.at<float>(0));
+    EXPECT_EQ(me3.at<float>(0), me4.at<float>(0));
+}
+
 #ifdef OPENCV_TEST_BIGDATA
 TEST(Mat, regression_6696_BigData_8Gb)
 {
@@ -1599,7 +1608,6 @@ TEST(Mat, regression_7873_mat_vector_initialize)
     ASSERT_EQ(2, sub_mat.size[2]);
 }
 
-#ifdef CV_CXX_STD_ARRAY
 TEST(Core_Mat_array, outputArray_create_getMat)
 {
     cv::Mat_<uchar> src_base(5, 1);
@@ -1688,7 +1696,6 @@ TEST(Core_Mat_array, SplitMerge)
         EXPECT_EQ(0, cvtest::norm(src[i], dst[i], NORM_INF));
     }
 }
-#endif
 
 TEST(Mat, regression_8680)
 {
@@ -1697,8 +1704,6 @@ TEST(Mat, regression_8680)
    mat.release();
    ASSERT_EQ(mat.channels(), 2);
 }
-
-#ifdef CV_CXX11
 
 TEST(Mat_, range_based_for)
 {
@@ -1724,6 +1729,10 @@ TEST(Mat, from_initializer_list)
     ASSERT_DOUBLE_EQ(cvtest::norm(A, B, NORM_INF), 0.);
     ASSERT_DOUBLE_EQ(cvtest::norm(A, C, NORM_INF), 0.);
     ASSERT_DOUBLE_EQ(cvtest::norm(B, C, NORM_INF), 0.);
+
+    auto D = Mat_<double>({2, 3}, {1, 2, 3, 4, 5, 6});
+    EXPECT_EQ(2, D.rows);
+    EXPECT_EQ(3, D.cols);
 }
 
 TEST(Mat_, from_initializer_list)
@@ -1756,7 +1765,5 @@ TEST(Mat_, template_based_ptr)
     int idx[4] = {1, 0, 0, 1};
     ASSERT_FLOAT_EQ(66.0f, *(mat.ptr<float>(idx)));
 }
-
-#endif
 
 }} // namespace
