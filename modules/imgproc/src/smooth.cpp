@@ -1332,8 +1332,6 @@ cv::Ptr<cv::BaseRowFilter> cv::getRowSumFilter(int srcType, int sumType, int ksi
     CV_Error_( CV_StsNotImplemented,
         ("Unsupported combination of source format (=%d), and buffer format (=%d)",
         srcType, sumType));
-
-    return Ptr<BaseRowFilter>();
 }
 
 
@@ -1374,8 +1372,6 @@ cv::Ptr<cv::BaseColumnFilter> cv::getColumnSumFilter(int sumType, int dstType, i
     CV_Error_( CV_StsNotImplemented,
         ("Unsupported combination of sum format (=%d), and destination format (=%d)",
         sumType, dstType));
-
-    return Ptr<BaseColumnFilter>();
 }
 
 
@@ -1656,8 +1652,6 @@ static Ptr<BaseRowFilter> getSqrRowSumFilter(int srcType, int sumType, int ksize
     CV_Error_( CV_StsNotImplemented,
               ("Unsupported combination of source format (=%d), and buffer format (=%d)",
                srcType, sumType));
-
-    return Ptr<BaseRowFilter>();
 }
 
 }
@@ -4003,7 +3997,8 @@ static bool openvx_gaussianBlur(InputArray _src, OutputArray _dst, Size ksize,
 #endif
 
 #ifdef HAVE_IPP
-#if IPP_VERSION_X100 == 201702  // IW 2017u2 has bug which doesn't allow use of partial inMem with tiling
+// IW 2017u2 has bug which doesn't allow use of partial inMem with tiling
+#if IPP_DISABLE_GAUSSIANBLUR_PARALLEL
 #define IPP_GAUSSIANBLUR_PARALLEL 0
 #else
 #define IPP_GAUSSIANBLUR_PARALLEL 1

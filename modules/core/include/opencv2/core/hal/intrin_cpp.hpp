@@ -202,6 +202,7 @@ Regular integers:
 |pack_u             | x |   | x |   |   |   |
 |unpack             | x | x | x | x | x | x |
 |extract            | x | x | x | x | x | x |
+|rotate (lanes)     | x | x | x | x | x | x |
 |cvt_flt32          |   |   |   |   |   | x |
 |cvt_flt64          |   |   |   |   |   | x |
 |transpose4x4       |   |   |   |   | x | x |
@@ -215,6 +216,7 @@ Big integers:
 |shift              | x | x |
 |logical            | x | x |
 |extract            | x | x |
+|rotate (lanes)     | x | x |
 
 Floating point:
 
@@ -236,7 +238,8 @@ Floating point:
 |sqrt, abs          | x | x |
 |float math         | x | x |
 |transpose4x4       | x |   |
-
+|extract            | x | x |
+|rotate (lanes)     | x | x |
 
  @{ */
 
@@ -1039,13 +1042,16 @@ template<typename _Tp, int n> inline bool v_check_any(const v_reg<_Tp, n>& a)
     return false;
 }
 
-/** @brief Bitwise select
+/** @brief Per-element select (blend operation)
 
-Return value will be built by combining values a and b using the following scheme:
-If the i-th bit in _mask_ is 1
-    select i-th bit from _a_
-else
-    select i-th bit from _b_ */
+Return value will be built by combining values _a_ and _b_ using the following scheme:
+    result[i] = mask[i] ? a[i] : b[i];
+
+@note: _mask_ element values are restricted to these values:
+- 0: select element from _b_
+- 0xff/0xffff/etc: select element from _a_
+(fully compatible with bitwise-based operator)
+*/
 template<typename _Tp, int n> inline v_reg<_Tp, n> v_select(const v_reg<_Tp, n>& mask,
                                                            const v_reg<_Tp, n>& a, const v_reg<_Tp, n>& b)
 {
@@ -1055,8 +1061,8 @@ template<typename _Tp, int n> inline v_reg<_Tp, n> v_select(const v_reg<_Tp, n>&
     for( int i = 0; i < n; i++ )
     {
         int_type m = Traits::reinterpret_int(mask.s[i]);
-        c.s[i] =  Traits::reinterpret_from_int((Traits::reinterpret_int(a.s[i]) & m)
-                                             | (Traits::reinterpret_int(b.s[i]) & ~m));
+        CV_DbgAssert(m == 0 || m == (~(int_type)0));  // restrict mask values: 0 or 0xff/0xffff/etc
+        c.s[i] = m ? a.s[i] : b.s[i];
     }
     return c;
 }
@@ -1499,7 +1505,7 @@ Usage:
 v_int32x4 a, b, c;
 c = v_extract<2>(a, b);
 @endcode
-For integer types only. */
+For all types. */
 template<int s, typename _Tp, int n>
 inline v_reg<_Tp, n> v_extract(const v_reg<_Tp, n>& a, const v_reg<_Tp, n>& b)
 {

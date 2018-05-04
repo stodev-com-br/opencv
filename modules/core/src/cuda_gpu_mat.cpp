@@ -344,13 +344,12 @@ void cv::cuda::ensureSizeIsEnough(int rows, int cols, int type, OutputArray arr)
 
 GpuMat cv::cuda::getInputMat(InputArray _src, Stream& stream)
 {
-    GpuMat src;
-
 #ifndef HAVE_CUDA
     (void) _src;
     (void) stream;
     throw_no_cuda();
 #else
+    GpuMat src;
     if (_src.kind() == _InputArray::CUDA_GPU_MAT)
     {
         src = _src.getGpuMat();
@@ -361,15 +360,12 @@ GpuMat cv::cuda::getInputMat(InputArray _src, Stream& stream)
         src = pool.getBuffer(_src.size(), _src.type());
         src.upload(_src, stream);
     }
-#endif
-
     return src;
+#endif
 }
 
 GpuMat cv::cuda::getOutputMat(OutputArray _dst, int rows, int cols, int type, Stream& stream)
 {
-    GpuMat dst;
-
 #ifndef HAVE_CUDA
     (void) _dst;
     (void) rows;
@@ -378,6 +374,7 @@ GpuMat cv::cuda::getOutputMat(OutputArray _dst, int rows, int cols, int type, St
     (void) stream;
     throw_no_cuda();
 #else
+    GpuMat dst;
     if (_dst.kind() == _InputArray::CUDA_GPU_MAT)
     {
         _dst.create(rows, cols, type);
@@ -388,9 +385,8 @@ GpuMat cv::cuda::getOutputMat(OutputArray _dst, int rows, int cols, int type, St
         BufferPool pool(stream);
         dst = pool.getBuffer(rows, cols, type);
     }
-#endif
-
     return dst;
+#endif
 }
 
 void cv::cuda::syncOutput(const GpuMat& dst, OutputArray _dst, Stream& stream)
@@ -488,7 +484,6 @@ GpuMat& cv::cuda::GpuMat::setTo(Scalar s, Stream& _stream)
     (void) s;
     (void) _stream;
     throw_no_cuda();
-    return *this;
 }
 
 GpuMat& cv::cuda::GpuMat::setTo(Scalar s, InputArray _mask, Stream& _stream)
@@ -497,7 +492,6 @@ GpuMat& cv::cuda::GpuMat::setTo(Scalar s, InputArray _mask, Stream& _stream)
     (void) _mask;
     (void) _stream;
     throw_no_cuda();
-    return *this;
 }
 
 void cv::cuda::GpuMat::convertTo(OutputArray _dst, int rtype, Stream& _stream) const
