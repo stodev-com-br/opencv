@@ -532,8 +532,9 @@ CV_EXPORTS_W void convertScaleAbs(InputArray src, OutputArray dst,
 
 /** @brief Converts an array to half precision floating number.
 
-This function converts FP32 (single precision floating point) from/to FP16 (half precision floating point).  The input array has to have type of CV_32F or
-CV_16S to represent the bit depth.  If the input array is neither of them, the function will raise an error.
+This function converts FP32 (single precision floating point) from/to FP16 (half precision floating point). CV_16S format is used to represent FP16 data.
+There are two use modes (src -> dst): CV_32F -> CV_16S and CV_16S -> CV_32F. The input array has to have type of CV_32F or
+CV_16S to represent the bit depth. If the input array is neither of them, the function will raise an error.
 The format of half precision floating point is defined in IEEE 754-2008.
 
 @param src input array.
@@ -598,7 +599,7 @@ or
     // access pixel coordinates
     Point pnt = locations[i];
 @endcode
-@param src single-channel array (type CV_8UC1)
+@param src single-channel array
 @param idx the output array, type of cv::Mat or std::vector<Point>, corresponding to non-zero indices in the input
 */
 CV_EXPORTS_W void findNonZero( InputArray src, OutputArray idx );
@@ -698,7 +699,8 @@ CV_EXPORTS double norm( const SparseMat& src, int normType );
 
 /** @brief Computes the Peak Signal-to-Noise Ratio (PSNR) image quality metric.
 
-This function calculates the Peak Signal-to-Noise Ratio (PSNR) image quality metric in decibels (dB), between two input arrays src1 and src2. Arrays must have depth CV_8U.
+This function calculates the Peak Signal-to-Noise Ratio (PSNR) image quality metric in decibels (dB),
+between two input arrays src1 and src2. The arrays must have the same type.
 
 The PSNR is calculated as follows:
 
@@ -706,13 +708,15 @@ The PSNR is calculated as follows:
 \texttt{PSNR} = 10 \cdot \log_{10}{\left( \frac{R^2}{MSE} \right) }
 \f]
 
-where R is the maximum integer value of depth CV_8U (255) and MSE is the mean squared error between the two arrays.
+where R is the maximum integer value of depth (e.g. 255 in the case of CV_8U data)
+and MSE is the mean squared error between the two arrays.
 
 @param src1 first input array.
 @param src2 second input array of the same size as src1.
+@param R the maximum pixel value (255 by default)
 
   */
-CV_EXPORTS_W double PSNR(InputArray src1, InputArray src2);
+CV_EXPORTS_W double PSNR(InputArray src1, InputArray src2, double R=255.);
 
 /** @brief naive nearest neighbor finder
 

@@ -45,6 +45,8 @@
 #include "grfmt_pxm.hpp"
 #include <iostream>
 
+#ifdef HAVE_IMGCODEC_PXM
+
 namespace cv
 {
 
@@ -243,7 +245,7 @@ bool PxMDecoder::readData( Mat& img )
             if( !m_binary )
             {
                 AutoBuffer<uchar> _src(m_width);
-                uchar* src = _src;
+                uchar* src = _src.data();
 
                 for (int y = 0; y < m_height; y++, data += img.step)
                 {
@@ -259,7 +261,7 @@ bool PxMDecoder::readData( Mat& img )
             else
             {
                 AutoBuffer<uchar> _src(src_pitch);
-                uchar* src = _src;
+                uchar* src = _src.data();
 
                 for (int y = 0; y < m_height; y++, data += img.step)
                 {
@@ -279,7 +281,7 @@ bool PxMDecoder::readData( Mat& img )
         case 24:
         {
             AutoBuffer<uchar> _src(std::max<size_t>(width3*2, src_pitch));
-            uchar* src = _src;
+            uchar* src = _src.data();
 
             for (int y = 0; y < m_height; y++, data += img.step)
             {
@@ -461,7 +463,7 @@ bool PxMEncoder::write(const Mat& img, const std::vector<int>& params)
         bufferSize = lineLength;
 
     AutoBuffer<char> _buffer(bufferSize);
-    char* buffer = _buffer;
+    char* buffer = _buffer.data();
 
     // write header;
     const int code = ((mode == PXM_TYPE_PBM) ? 1 : (mode == PXM_TYPE_PGM) ? 2 : 3)
@@ -619,3 +621,5 @@ bool PxMEncoder::write(const Mat& img, const std::vector<int>& params)
 }
 
 }
+
+#endif // HAVE_IMGCODEC_PXM

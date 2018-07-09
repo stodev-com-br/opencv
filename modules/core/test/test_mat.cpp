@@ -1608,6 +1608,32 @@ TEST(Mat, regression_7873_mat_vector_initialize)
     ASSERT_EQ(2, sub_mat.size[2]);
 }
 
+TEST(Mat, regression_10507_mat_setTo)
+{
+    Size sz(6, 4);
+    Mat test_mask(sz, CV_8UC1, cv::Scalar::all(255));
+    test_mask.at<uchar>(1,0) = 0;
+    test_mask.at<uchar>(0,1) = 0;
+    for (int cn = 1; cn <= 4; cn++)
+    {
+        cv::Mat A(sz, CV_MAKE_TYPE(CV_32F, cn), cv::Scalar::all(5));
+        A.setTo(cv::Scalar::all(std::numeric_limits<float>::quiet_NaN()), test_mask);
+        int nans = 0;
+        for (int y = 0; y < A.rows; y++)
+        {
+            for (int x = 0; x < A.cols; x++)
+            {
+                for (int c = 0; c < cn; c++)
+                {
+                    float v = A.ptr<float>(y, x)[c];
+                    nans += (v == v) ? 0 : 1;
+                }
+            }
+        }
+        EXPECT_EQ(nans, cn * (sz.area() - 2)) << "A=" << A << std::endl << "mask=" << test_mask << std::endl;
+    }
+}
+
 TEST(Core_Mat_array, outputArray_create_getMat)
 {
     cv::Mat_<uchar> src_base(5, 1);
@@ -1764,6 +1790,28 @@ TEST(Mat_, template_based_ptr)
                                               55.0f, 66.0f, 77.0f, 88.0f);
     int idx[4] = {1, 0, 0, 1};
     ASSERT_FLOAT_EQ(66.0f, *(mat.ptr<float>(idx)));
+}
+
+
+BIGDATA_TEST(Mat, push_back_regression_4158)  // memory usage: ~10.6 Gb
+{
+    Mat result;
+
+    Mat tail(100, 500000, CV_32FC2, Scalar(1, 2));
+
+    tail.copyTo(result);
+    for (int i = 1; i < 15; i++)
+    {
+        result.push_back(tail);
+        std::cout << "i = " << i << "  result = " << result.size() << "   used = " << (uint64)result.total()*result.elemSize()*(1.0 / (1 << 20)) << " Mb"
+            << "   allocated=" << (uint64)(result.datalimit - result.datastart)*(1.0 / (1 << 20)) << " Mb" << std::endl;
+    }
+    for (int i = 0; i < 15; i++)
+    {
+        Rect roi(0, tail.rows * i, tail.cols, tail.rows);
+        int nz = countNonZero(result(roi).reshape(1) == 2);
+        EXPECT_EQ(tail.total(), (size_t)nz) << "i=" << i;
+    }
 }
 
 }} // namespace

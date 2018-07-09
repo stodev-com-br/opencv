@@ -73,7 +73,7 @@ public:
 
     virtual bool tryFuse(Ptr<Layer>& top) CV_OVERRIDE
     {
-        if (preferableTarget == DNN_TARGET_OPENCL && !fuse_batch_norm)
+        if (!fuse_batch_norm)
         {
             top->getScaleShift(scale, shift);
             fuse_batch_norm = !scale.empty() || !shift.empty();
@@ -102,6 +102,9 @@ public:
     {
         UMat bnorm_weight = scale.empty() ? UMat() : scale.getUMat(ACCESS_READ);
         UMat bnorm_bias = shift.empty() ? UMat() : shift.getUMat(ACCESS_READ);
+        bool use_half = (inputs[0].depth() == CV_16S);
+        String opts = format(" -DT=%s -DT4=%s -Dconvert_T=%s", use_half ? "half" : "float",
+                             use_half ? "half4" : "float4", use_half ? "convert_half4" : "convert_float4");
 
         int splitDim = (acrossChannels) ? 1 : 2;
         for (size_t inpIdx = 0; inpIdx < inputs.size(); inpIdx++)
@@ -111,12 +114,11 @@ public:
             int newRows = total(shape(inpMat), 0, splitDim);
 
             MatShape s = shape(newRows, inpMat.total() / newRows);
-            UMat oneMat = UMat::ones(s[1], 1, CV_32F);
-            UMat meanMat = UMat(s[0], 1, CV_32F);
+            UMat meanMat = UMat(s[0], 1, (use_half) ? CV_16S : CV_32F);
             UMat tmpMat  = UMat(s[0], s[1], CV_32F);
             float alpha = 1.0f / s[1];
 
-            String buildopt = "-DNUM=4";
+            String buildopt = "-DNUM=4" + opts;
             ocl::Kernel k("mean_fuse4", ocl::dnn::mvn_oclsrc, buildopt);
             size_t localsize[] = { 128 };
             size_t globalsize[] = { (size_t)s[0] / 4 * localsize[0] };
@@ -167,13 +169,14 @@ public:
         int row_size = total(shape(inputs[0]), 0, splitDim);
         int plane_size = total(shape(inputs[0]), splitDim);
         if (normVariance && (row_size % 4 == 0) && (plane_size % 4 == 0))
-        {
-            bool ret = fast_forward_ocl(inputs, outputs);
-            return ret;
-        }
+            return fast_forward_ocl(inputs, outputs);
+
+        if (inputs[0].depth() == CV_16S)
+            return false;
 
         UMat bnorm_weight = scale.empty() ? UMat() : scale.getUMat(ACCESS_READ);
         UMat bnorm_bias = shift.empty() ? UMat() : shift.getUMat(ACCESS_READ);
+        String opts = format(" -DT=float -DT4=float4 -Dconvert_T=convert_float4");
 
         for (size_t inpIdx = 0; inpIdx < inputs.size(); inpIdx++)
         {
@@ -195,7 +198,7 @@ public:
 
             int number = (s[1] % 8 == 0) ? 8 : ((s[1] % 4 == 0) ? 4 : 1);
             size_t global[] = { (size_t)s[0], (size_t)(s[1] / number) };
-            String buildopt = format("-DNUM=%d", number);
+            String buildopt = format("-DNUM=%d", number) + opts;
             if (normVariance)
             {
                 String kname = format("calc_mean%d", number);
@@ -249,8 +252,7 @@ public:
         CV_TRACE_FUNCTION();
         CV_TRACE_ARG_VALUE(name, "name", name.c_str());
 
-        CV_OCL_RUN((preferableTarget == DNN_TARGET_OPENCL) &&
-                   OCL_PERFORMANCE_CHECK(ocl::Device::getDefault().isIntel()),
+        CV_OCL_RUN(IS_DNN_OPENCL_TARGET(preferableTarget),
                    forward_ocl(inputs_arr, outputs_arr, internals_arr))
 
         Layer::forward_fallback(inputs_arr, outputs_arr, internals_arr);
@@ -271,25 +273,53 @@ public:
             for( i = 0; i < splitDim; i++ )
                 newRows *= inpBlob.size[i];
 
-            if (inpBlob.total() == newRows)
-            {
-                // MVN is applied to single values at an every row.
-                outBlob.setTo(0);
-                return;
-            }
-
             Mat inpMat = inpBlob.reshape(1, newRows);
             Mat outMat = outBlob.reshape(1, newRows);
+
+            if ( inpBlob.total() == newRows )
+            {
+                // MVN is applied to single values at an every row.
+                if (shift.empty())
+                {
+                    outBlob.setTo(0);
+                }
+                else
+                {
+                    for ( i = 0; i < newRows; i++ )
+                    {
+                        outMat.row(i).setTo(((float*)shift.data)[i]);
+                    }
+                }
+                return;
+            }
 
             Scalar mean, dev;
             for ( i = 0; i < newRows; i++)
             {
                 Mat inpRow = inpMat.row(i);
                 Mat outRow = outMat.row(i);
-
+                float weight = 1.f;
+                float bias = 0.f;
+                if (fuse_batch_norm)
+                {
+                    weight = i < scale.cols ? ((float*)scale.data)[i] : weight;
+                    bias = i < shift.cols ? ((float*)shift.data)[i] : bias;
+                }
                 cv::meanStdDev(inpRow, mean, (normVariance) ? dev : noArray());
                 double alpha = (normVariance) ? 1/(eps + dev[0]) : 1;
-                inpRow.convertTo(outRow, outRow.type(), alpha, -mean[0] * alpha);
+                double normalizationScale = 1.0;
+                double normalizationShift = 0.0;
+                if (fuse_batch_norm)
+                {
+                    normalizationScale = alpha * weight;
+                    normalizationShift = -mean[0] * normalizationScale + bias;
+                }
+                else
+                {
+                    normalizationScale = alpha;
+                    normalizationShift = -mean[0] * alpha;
+                }
+                inpRow.convertTo(outRow, outRow.type(), normalizationScale, normalizationShift);
             }
         }
     }

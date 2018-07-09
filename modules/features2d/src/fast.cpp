@@ -83,7 +83,7 @@ void FAST_t(InputArray _img, std::vector<KeyPoint>& keypoints, int threshold, bo
 
     AutoBuffer<uchar> _buf((img.cols+16)*3*(sizeof(int) + sizeof(uchar)) + 128);
     uchar* buf[3];
-    buf[0] = _buf; buf[1] = buf[0] + img.cols; buf[2] = buf[1] + img.cols;
+    buf[0] = _buf.data(); buf[1] = buf[0] + img.cols; buf[2] = buf[1] + img.cols;
     int* cpbuf[3];
     cpbuf[0] = (int*)alignPtr(buf[2] + img.cols, sizeof(int)) + 1;
     cpbuf[1] = cpbuf[0] + img.cols + 1;
@@ -521,6 +521,12 @@ public:
     void detect( InputArray _image, std::vector<KeyPoint>& keypoints, InputArray _mask ) CV_OVERRIDE
     {
         CV_INSTRUMENT_REGION()
+
+        if(_image.empty())
+        {
+            keypoints.clear();
+            return;
+        }
 
         Mat mask = _mask.getMat(), grayImage;
         UMat ugrayImage;

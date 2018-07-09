@@ -7,12 +7,13 @@
 
 const char* keys =
     "{ help  h     | | Print help message. }"
-    "{ input i     | | Path to input image or video file. Skip this argument to capture frames from a camera.}"
+    "{ device      |  0 | camera device number. }"
+    "{ input i     | | Path to input image or video file. Skip this argument to capture frames from a camera. }"
     "{ model m     | | Path to a binary file of model contains trained weights. "
                       "It could be a file with extensions .caffemodel (Caffe), "
-                      ".pb (TensorFlow), .t7 or .net (Torch), .weights (Darknet) }"
+                      ".pb (TensorFlow), .t7 or .net (Torch), .weights (Darknet).}"
     "{ config c    | | Path to a text file of model contains network configuration. "
-                      "It could be a file with extensions .prototxt (Caffe), .pbtxt (TensorFlow), .cfg (Darknet) }"
+                      "It could be a file with extensions .prototxt (Caffe), .pbtxt (TensorFlow), .cfg (Darknet).}"
     "{ framework f | | Optional name of an origin framework of the model. Detect it automatically if it does not set. }"
     "{ classes     | | Optional path to a text file with names of classes to label detected objects. }"
     "{ mean        | | Preprocess input image by subtracting mean values. Mean values should be in BGR order and delimited by spaces. }"
@@ -21,18 +22,23 @@ const char* keys =
     "{ height      | -1 | Preprocess input image by resizing to a specific height. }"
     "{ rgb         |    | Indicate that model works with RGB input images instead BGR ones. }"
     "{ thr         | .5 | Confidence threshold. }"
+    "{ thr         | .4 | Non-maximum suppression threshold. }"
     "{ backend     |  0 | Choose one of computation backends: "
-                         "0: default C++ backend, "
+                         "0: automatically (by default), "
                          "1: Halide language (http://halide-lang.org/), "
-                         "2: Intel's Deep Learning Inference Engine (https://software.seek.intel.com/deep-learning-deployment)}"
-    "{ target      |  0 | Choose one of target computation devices: "
-                         "0: CPU target (by default),"
-                         "1: OpenCL }";
+                         "2: Intel's Deep Learning Inference Engine (https://software.intel.com/openvino-toolkit), "
+                         "3: OpenCV implementation }"
+    "{ target      | 0 | Choose one of target computation devices: "
+                         "0: CPU target (by default), "
+                         "1: OpenCL, "
+                         "2: OpenCL fp16 (half-float precision), "
+                         "3: VPU }";
+
 
 using namespace cv;
 using namespace dnn;
 
-float confThreshold;
+float confThreshold, nmsThreshold;
 std::vector<std::string> classes;
 
 void postprocess(Mat& frame, const std::vector<Mat>& out, Net& net);
@@ -54,6 +60,7 @@ int main(int argc, char** argv)
     }
 
     confThreshold = parser.get<float>("thr");
+    nmsThreshold = parser.get<float>("nms");
     float scale = parser.get<float>("scale");
     Scalar mean = parser.get<Scalar>("mean");
     bool swapRB = parser.get<bool>("rgb");
@@ -91,7 +98,7 @@ int main(int argc, char** argv)
     if (parser.has("input"))
         cap.open(parser.get<String>("input"));
     else
-        cap.open(0);
+        cap.open(parser.get<int>("device"));
 
     // Process frames.
     Mat frame, blob;
@@ -139,6 +146,9 @@ void postprocess(Mat& frame, const std::vector<Mat>& outs, Net& net)
     static std::vector<int> outLayers = net.getUnconnectedOutLayers();
     static std::string outLayerType = net.getLayer(outLayers[0])->type;
 
+    std::vector<int> classIds;
+    std::vector<float> confidences;
+    std::vector<Rect> boxes;
     if (net.getLayer(0)->outputNameToIndex("im_info") != -1)  // Faster-RCNN or R-FCN
     {
         // Network produces output blob with a shape 1x1xNx7 where N is a number of
@@ -155,8 +165,11 @@ void postprocess(Mat& frame, const std::vector<Mat>& outs, Net& net)
                 int top = (int)data[i + 4];
                 int right = (int)data[i + 5];
                 int bottom = (int)data[i + 6];
-                int classId = (int)(data[i + 1]) - 1;  // Skip 0th background class id.
-                drawPred(classId, confidence, left, top, right, bottom, frame);
+                int width = right - left + 1;
+                int height = bottom - top + 1;
+                classIds.push_back((int)(data[i + 1]) - 1);  // Skip 0th background class id.
+                boxes.push_back(Rect(left, top, width, height));
+                confidences.push_back(confidence);
             }
         }
     }
@@ -176,16 +189,16 @@ void postprocess(Mat& frame, const std::vector<Mat>& outs, Net& net)
                 int top = (int)(data[i + 4] * frame.rows);
                 int right = (int)(data[i + 5] * frame.cols);
                 int bottom = (int)(data[i + 6] * frame.rows);
-                int classId = (int)(data[i + 1]) - 1;  // Skip 0th background class id.
-                drawPred(classId, confidence, left, top, right, bottom, frame);
+                int width = right - left + 1;
+                int height = bottom - top + 1;
+                classIds.push_back((int)(data[i + 1]) - 1);  // Skip 0th background class id.
+                boxes.push_back(Rect(left, top, width, height));
+                confidences.push_back(confidence);
             }
         }
     }
     else if (outLayerType == "Region")
     {
-        std::vector<int> classIds;
-        std::vector<float> confidences;
-        std::vector<Rect> boxes;
         for (size_t i = 0; i < outs.size(); ++i)
         {
             // Network produces output blob with a shape NxC where N is a number of
@@ -213,18 +226,19 @@ void postprocess(Mat& frame, const std::vector<Mat>& outs, Net& net)
                 }
             }
         }
-        std::vector<int> indices;
-        NMSBoxes(boxes, confidences, confThreshold, 0.4f, indices);
-        for (size_t i = 0; i < indices.size(); ++i)
-        {
-            int idx = indices[i];
-            Rect box = boxes[idx];
-            drawPred(classIds[idx], confidences[idx], box.x, box.y,
-                     box.x + box.width, box.y + box.height, frame);
-        }
     }
     else
         CV_Error(Error::StsNotImplemented, "Unknown output layer type: " + outLayerType);
+
+    std::vector<int> indices;
+    NMSBoxes(boxes, confidences, confThreshold, nmsThreshold, indices);
+    for (size_t i = 0; i < indices.size(); ++i)
+    {
+        int idx = indices[i];
+        Rect box = boxes[idx];
+        drawPred(classIds[idx], confidences[idx], box.x, box.y,
+                 box.x + box.width, box.y + box.height, frame);
+    }
 }
 
 void drawPred(int classId, float conf, int left, int top, int right, int bottom, Mat& frame)

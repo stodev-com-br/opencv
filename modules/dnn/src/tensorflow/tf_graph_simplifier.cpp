@@ -5,6 +5,8 @@
 // Copyright (C) 2018, Intel Corporation, all rights reserved.
 // Third party copyrights are property of their respective owners.
 
+#include "../precomp.hpp"
+
 #ifdef HAVE_PROTOBUF
 
 #include "tf_graph_simplifier.hpp"
@@ -538,6 +540,81 @@ public:
     }
 };
 
+// In case of resizing by factor.
+class ResizeBilinearSubgraph : public Subgraph
+{
+public:
+    ResizeBilinearSubgraph()
+    {
+        int input = addNodeToMatch("");
+
+        int shape = addNodeToMatch("Shape", input);
+        int stack = addNodeToMatch("Const");
+        int stack_1 = addNodeToMatch("Const");
+        int stack_2 = addNodeToMatch("Const");
+        int strided_slice = addNodeToMatch("StridedSlice", shape, stack, stack_1, stack_2);
+        int factorY = addNodeToMatch("Const");
+        int mul = addNodeToMatch("Mul", strided_slice, factorY);
+
+        shape = addNodeToMatch("Shape", input);
+        stack = addNodeToMatch("Const");
+        stack_1 = addNodeToMatch("Const");
+        stack_2 = addNodeToMatch("Const");
+        strided_slice = addNodeToMatch("StridedSlice", shape, stack, stack_1, stack_2);
+        int factorX = addNodeToMatch("Const");
+        int mul_1 = addNodeToMatch("Mul", strided_slice, factorX);
+
+        int pack = addNodeToMatch("Pack", mul, mul_1);
+
+        addNodeToMatch("ResizeBilinear", input, pack);
+        setFusedNode("ResizeBilinear", input, factorY, factorX);
+    }
+};
+
+// In case of resizing by factor.
+class UpsamplingKerasSubgraph : public Subgraph
+{
+public:
+    UpsamplingKerasSubgraph()
+    {
+        int input = addNodeToMatch("");
+        int shape = addNodeToMatch("Shape", input);
+        int stack = addNodeToMatch("Const");
+        int stack_1 = addNodeToMatch("Const");
+        int stack_2 = addNodeToMatch("Const");
+        int strided_slice = addNodeToMatch("StridedSlice", shape, stack, stack_1, stack_2);
+        int factors = addNodeToMatch("Const");
+        int mul = addNodeToMatch("Mul", strided_slice, factors);
+        addNodeToMatch("ResizeNearestNeighbor", input, mul);
+        setFusedNode("ResizeNearestNeighbor", input, factors);
+    }
+
+    virtual void finalize(tensorflow::GraphDef& net, tensorflow::NodeDef* fusedNode,
+                          std::vector<tensorflow::NodeDef*>& inputNodes) CV_OVERRIDE
+    {
+        Mat factorsMat = getTensorContent(inputNodes[1]->attr().at("value").tensor());
+        CV_Assert(factorsMat.total() == 2, factorsMat.type() == CV_32SC1);
+
+        // Height scale factor
+        tensorflow::TensorProto* factorY = inputNodes[1]->mutable_attr()->at("value").mutable_tensor();
+        factorY->clear_int_val();
+        factorY->clear_tensor_content();
+        factorY->add_int_val(factorsMat.at<int>(0, 0));
+
+        // Width scale factor.
+        tensorflow::NodeDef* factorXNode = net.add_node();
+        factorXNode->set_op("Const");
+        factorXNode->set_name(fusedNode->name() + "/factor_y");
+
+        tensorflow::AttrValue factorX;
+        factorX.mutable_tensor()->set_dtype(tensorflow::DT_INT32);
+        factorX.mutable_tensor()->add_int_val(factorsMat.at<int>(0, 1));
+        factorXNode->mutable_attr()->insert(MapPair<std::string, tensorflow::AttrValue>("value", factorX));
+
+        fusedNode->add_input(factorXNode->name());
+    }
+};
+
 void simplifySubgraphs(tensorflow::GraphDef& net)
 {
     std::vector<Ptr<Subgraph> > subgraphs;
@@ -551,6 +628,8 @@ void simplifySubgraphs(tensorflow::GraphDef& net)
     subgraphs.push_back(Ptr<Subgraph>(new L2NormalizeSubgraph()));
     subgraphs.push_back(Ptr<Subgraph>(new DeconvolutionValidKerasSubgraph()));
     subgraphs.push_back(Ptr<Subgraph>(new DeconvolutionSameKerasSubgraph()));
+    subgraphs.push_back(Ptr<Subgraph>(new ResizeBilinearSubgraph()));
+    subgraphs.push_back(Ptr<Subgraph>(new UpsamplingKerasSubgraph()));
 
     int numNodes = net.node_size();
     std::vector<int> matchedNodesIds;
@@ -612,7 +691,7 @@ void RemoveIdentityOps(tensorflow::GraphDef& net)
 
 Mat getTensorContent(const tensorflow::TensorProto &tensor)
 {
-    std::string content = tensor.tensor_content();
+    const std::string& content = tensor.tensor_content();
     switch (tensor.dtype())
     {
         case tensorflow::DT_FLOAT:
@@ -679,6 +758,14 @@ Mat getTensorContent(const tensorflow::TensorProto &tensor)
             break;
     }
     return Mat();
+}
+
+void releaseTensor(tensorflow::TensorProto* tensor)
+{
+    if (!tensor->mutable_tensor_content()->empty())
+    {
+        delete tensor->release_tensor_content();
+    }
 }
 
 CV__DNN_EXPERIMENTAL_NS_END

@@ -135,7 +135,7 @@ public:
 
     virtual bool supportBackend(int backendId) CV_OVERRIDE
     {
-        return backendId == DNN_BACKEND_DEFAULT ||
+        return backendId == DNN_BACKEND_OPENCV ||
                backendId == DNN_BACKEND_HALIDE && haveHalide() &&
                (type == MAX || type == AVE && !pad.width && !pad.height) ||
                backendId == DNN_BACKEND_INFERENCE_ENGINE && haveInfEngine() && (type == MAX || type == AVE);
@@ -147,6 +147,7 @@ public:
         std::vector<UMat> inputs;
         std::vector<UMat> outputs;
 
+        bool use_half = (inps.depth() == CV_16S);
         inps.getUMatVector(inputs);
         outs.getUMatVector(outputs);
 
@@ -164,6 +165,8 @@ public:
                                 (type == AVE ? LIBDNN_POOLING_METHOD_AVE :
                                                LIBDNN_POOLING_METHOD_STO);
             config.avePoolPaddedArea = avePoolPaddedArea;
+            config.computeMaxIdx = computeMaxIdx;
+            config.use_half = use_half;
             poolOp = Ptr<OCL4DNNPool<float> >(new OCL4DNNPool<float>(config));
         }
 
@@ -189,8 +192,7 @@ public:
         CV_TRACE_FUNCTION();
         CV_TRACE_ARG_VALUE(name, "name", name.c_str());
 
-        CV_OCL_RUN((preferableTarget == DNN_TARGET_OPENCL) &&
-                   OCL_PERFORMANCE_CHECK(ocl::Device::getDefault().isIntel()),
+        CV_OCL_RUN(IS_DNN_OPENCL_TARGET(preferableTarget),
                    forward_ocl(inputs_arr, outputs_arr, internals_arr))
 
         Layer::forward_fallback(inputs_arr, outputs_arr, internals_arr);

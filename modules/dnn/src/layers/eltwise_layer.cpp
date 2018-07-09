@@ -79,7 +79,7 @@ public:
             else if (operation == "max")
                 op = MAX;
             else
-                CV_Error(cv::Error::StsBadArg, "Unknown operaticon type \"" + operation + "\"");
+                CV_Error(cv::Error::StsBadArg, "Unknown operation type \"" + operation + "\"");
         }
 
         if (params.has("coeff"))
@@ -96,9 +96,9 @@ public:
 
     virtual bool supportBackend(int backendId) CV_OVERRIDE
     {
-        return backendId == DNN_BACKEND_DEFAULT ||
-               backendId == DNN_BACKEND_HALIDE && haveHalide() ||
-               backendId == DNN_BACKEND_INFERENCE_ENGINE && haveInfEngine();
+        return backendId == DNN_BACKEND_OPENCV ||
+               backendId == DNN_BACKEND_HALIDE ||
+               backendId == DNN_BACKEND_INFERENCE_ENGINE && (op != SUM || coeffs.empty());
     }
 
     bool getMemoryShapes(const std::vector<MatShape> &inputs,
@@ -271,6 +271,9 @@ public:
         std::vector<UMat> inputs;
         std::vector<UMat> outputs;
 
+        if (inputs_.depth() == CV_16S && op != SUM)
+            return false;
+
         inputs_.getUMatVector(inputs);
         outputs_.getUMatVector(outputs);
 
@@ -284,10 +287,15 @@ public:
                     {
                         size_t localsize[] = { 128 };
                         size_t globalsize[] = { (size_t)channels / 4 * localsize[0] };
+                        String opts;
+                        if (inputs_.depth() == CV_16S)
+                            opts = " -DDtype=half -DDtype4=half4 -DDtype8=half8";
+                        else
+                            opts = " -DDtype=float -DDtype4=float4 -DDtype8=float8";
 
                         for (int i = 0; i < (inputs.size() - 1); ++i)
                         {
-                            String buildopt = format("-DLOOP=%d", i);
+                            String buildopt = format("-DLOOP=%d", i) + opts;
                             ocl::Kernel kernel("op_sum4", ocl::dnn::eltwise_oclsrc, buildopt);
                             int idx = 0;
                             UMat inpMat = (i == 0) ? inputs[0] : UMat();
@@ -306,6 +314,9 @@ public:
                     }
                     else
                     {
+                        if (inputs_.depth() == CV_16S)
+                            return false;
+
                         float coeff1 = coeffs.empty() ? 1.f : coeffs[0];
                         float coeff2 = coeffs.empty() ? 1.f : coeffs[1];
                         UMat mul0, mul1;
@@ -343,7 +354,7 @@ public:
         CV_TRACE_FUNCTION();
         CV_TRACE_ARG_VALUE(name, "name", name.c_str());
 
-        CV_OCL_RUN((preferableTarget == DNN_TARGET_OPENCL) &&
+        CV_OCL_RUN(IS_DNN_OPENCL_TARGET(preferableTarget) &&
                    OCL_PERFORMANCE_CHECK(ocl::Device::getDefault().isIntel()),
                    forward_ocl(inputs_arr, outputs_arr, internals_arr))
 

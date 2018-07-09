@@ -91,7 +91,7 @@ static bool param_dumpErrors = utils::getConfigurationParameterBool("OPENCV_DUMP
 #include <cstdlib>        // std::abort
 #endif
 
-#if defined __ANDROID__ || defined __linux__ || defined __FreeBSD__ || defined __HAIKU__
+#if defined __ANDROID__ || defined __linux__ || defined __FreeBSD__ || defined __HAIKU__ || defined __Fuchsia__
 #  include <unistd.h>
 #  include <fcntl.h>
 #  include <elf.h>
@@ -736,7 +736,6 @@ int64 getCPUTickCount(void)
 
 int64 getCPUTickCount(void)
 {
-    int64 result = 0;
     unsigned upper, lower, tmp;
     __asm__ volatile(
                      "0:                  \n"
@@ -805,7 +804,7 @@ String format( const char* fmt, ... )
         va_list va;
         va_start(va, fmt);
         int bsize = static_cast<int>(buf.size());
-        int len = cv_vsnprintf((char *)buf, bsize, fmt, va);
+        int len = cv_vsnprintf(buf.data(), bsize, fmt, va);
         va_end(va);
 
         CV_Assert(len >= 0 && "Check format string for errors");
@@ -815,7 +814,7 @@ String format( const char* fmt, ... )
             continue;
         }
         buf[bsize - 1] = 0;
-        return String((char *)buf, len);
+        return String(buf.data(), len);
     }
 }
 

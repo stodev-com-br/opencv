@@ -149,7 +149,7 @@ public:
         int k = std::min(k0, nsamples);
 
         AutoBuffer<float> buf(testcount*k*2);
-        float* dbuf = buf;
+        float* dbuf = buf.data();
         float* rbuf = dbuf + testcount*k;
 
         const float* rptr = responses.ptr<float>();
@@ -437,7 +437,16 @@ public:
     {
         if (val != BRUTE_FORCE && val != KDTREE)
             val = BRUTE_FORCE;
+
+        int k = getDefaultK();
+        int e = getEmax();
+        bool c = getIsClassifier();
+
         initImpl(val);
+
+        setDefaultK(k);
+        setEmax(e);
+        setIsClassifier(c);
     }
 
 public:

@@ -294,6 +294,9 @@ set(PIXARLOG_SUPPORT FALSE)
 set(JPEG_SUPPORT FALSE)
 if(HAVE_JPEG)
   set(JPEG_SUPPORT TRUE)
+  if(TARGET ${JPEG_LIBRARY} AND DEFINED ${JPEG_LIBRARY}_BINARY_DIR)
+    include_directories("${${JPEG_LIBRARY}_BINARY_DIR}")
+  endif()
   include_directories(${JPEG_INCLUDE_DIR})
 endif()
 
@@ -414,7 +417,7 @@ set(lib_srcs
     tif_write.c
     tif_zip.c
     tif_stream.cxx
-	snprintf.c
+    snprintf.c
     t4.h
     tif_dir.h
     tif_fax3.h

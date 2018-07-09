@@ -255,6 +255,7 @@ Cv64suf;
 
 #ifdef __OPENCV_BUILD
 #  define DISABLE_OPENCV_3_COMPATIBILITY
+#  define OPENCV_DISABLE_DEPRECATED_COMPATIBILITY
 #endif
 
 #ifdef CVAPI_EXPORTS
@@ -435,7 +436,7 @@ Cv64suf;
 // Integer types portatibility
 #ifdef OPENCV_STDINT_HEADER
 #include OPENCV_STDINT_HEADER
-#else
+#elif defined(__cplusplus)
 #if defined(_MSC_VER) && _MSC_VER < 1600 /* MSVS 2010 */
 namespace cv {
 typedef signed char int8_t;
@@ -472,9 +473,15 @@ typedef ::int64_t int64_t;
 typedef ::uint64_t uint64_t;
 }
 #endif
+#else // pure C
+#include <stdint.h>
 #endif
 
 
 //! @}
+
+#ifndef __cplusplus
+#include "opencv2/core/fast_math.hpp" // define cvRound(double)
+#endif
 
 #endif // OPENCV_CORE_CVDEF_H

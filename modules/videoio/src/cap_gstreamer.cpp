@@ -125,7 +125,7 @@ private:
         gst_init(NULL, NULL);
         guint major, minor, micro, nano;
         gst_version(&major, &minor, &micro, &nano);
-        if (GST_VERSION_MAJOR == major)
+        if (GST_VERSION_MAJOR != major)
         {
             CV_WARN("incompatible gstreamer version");
         }
@@ -268,7 +268,6 @@ bool GStreamerCapture::grabFrame()
     sample = gst_app_sink_pull_sample(GST_APP_SINK(sink));
     if(!sample)
         return false;
-    gst_sample_ref(sample);
 #endif
 
     if (isPosFramesEmulated)
@@ -1657,6 +1656,8 @@ bool CvVideoWriter_GStreamer::open( const char * filename, int fourcc,
         gst_pad_link(sinkPeer, srcPeer);
     }
 #endif
+
+    GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(pipeline), GST_DEBUG_GRAPH_SHOW_ALL, "write-pipeline");
 
     stateret = gst_element_set_state(GST_ELEMENT(pipeline), GST_STATE_PLAYING);
     if(stateret  == GST_STATE_CHANGE_FAILURE) {

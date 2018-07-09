@@ -12,7 +12,8 @@ ocv_add_dispatched_file_force_all("layers/layers_common" AVX AVX2 AVX512_SKX)
 
 ocv_add_module(dnn opencv_core opencv_imgproc WRAP python matlab java js)
 
-ocv_option(OPENCV_DNN_OPENCL "Build with OpenCL support" HAVE_OPENCL)
+ocv_option(OPENCV_DNN_OPENCL "Build with OpenCL support" HAVE_OPENCL AND NOT APPLE)
+
 if(OPENCV_DNN_OPENCL AND HAVE_OPENCL)
   add_definitions(-DCV_OCL4DNN=1)
 else()
@@ -45,6 +46,10 @@ endif()
 
 if(ANDROID)
   add_definitions(-DDISABLE_POSIX_MEMALIGN -DTH_DISABLE_HEAP_TRACKING)
+endif()
+
+if(NOT BUILD_PROTOBUF)
+  add_definitions(-DOPENCV_DNN_EXTERNAL_PROTOBUF=1)
 endif()
 
 add_definitions(-DHAVE_PROTOBUF=1)
@@ -80,7 +85,7 @@ else()
   set(sources_options EXCLUDE_OPENCL)
 endif()
 
-if(WITH_INF_ENGINE AND HAVE_INF_ENGINE)
+if(HAVE_INF_ENGINE)
   add_definitions(-DHAVE_INF_ENGINE=1)
   list(APPEND include_dirs ${INF_ENGINE_INCLUDE_DIRS})
   list(APPEND libs ${INF_ENGINE_LIBRARIES})

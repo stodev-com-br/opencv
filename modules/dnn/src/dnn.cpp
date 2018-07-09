@@ -62,6 +62,19 @@ CV__DNN_EXPERIMENTAL_NS_BEGIN
 // this option is useful to run valgrind memory errors detection
 static bool DNN_DISABLE_MEMORY_OPTIMIZATIONS = utils::getConfigurationParameterBool("OPENCV_DNN_DISABLE_MEMORY_OPTIMIZATIONS", false);
 
+#ifdef HAVE_OPENCL
+static bool DNN_OPENCL_ALLOW_ALL_DEVICES = utils::getConfigurationParameterBool("OPENCV_DNN_OPENCL_ALLOW_ALL_DEVICES", false);
+#endif
+
+static int PARAM_DNN_BACKEND_DEFAULT = (int)utils::getConfigurationParameterSizeT("OPENCV_DNN_BACKEND_DEFAULT",
+#ifdef HAVE_INF_ENGINE
+    (size_t)DNN_BACKEND_INFERENCE_ENGINE
+#else
+    (size_t)DNN_BACKEND_OPENCV
+#endif
+);
+
+
 using std::vector;
 using std::map;
 using std::make_pair;
@@ -221,7 +234,7 @@ void imagesFromBlob(const cv::Mat& blob_, OutputArrayOfArrays images_)
 class OpenCLBackendWrapper : public BackendWrapper
 {
 public:
-    OpenCLBackendWrapper(Mat& m) : BackendWrapper(DNN_BACKEND_DEFAULT, DNN_TARGET_OPENCL)
+    OpenCLBackendWrapper(Mat& m) : BackendWrapper(DNN_BACKEND_OPENCV, DNN_TARGET_OPENCL)
     {
         m.copyTo(umat);
         host = &m;
@@ -229,7 +242,7 @@ public:
     }
 
     OpenCLBackendWrapper(const Ptr<BackendWrapper>& baseBuffer, Mat& m)
-        : BackendWrapper(DNN_BACKEND_DEFAULT, DNN_TARGET_OPENCL)
+        : BackendWrapper(DNN_BACKEND_OPENCV, DNN_TARGET_OPENCL)
     {
         Ptr<OpenCLBackendWrapper> base = baseBuffer.dynamicCast<OpenCLBackendWrapper>();
         CV_Assert(!base.empty());
@@ -396,8 +409,44 @@ struct LayerData
 struct DataLayer : public Layer
 {
     void finalize(const std::vector<Mat*>&, std::vector<Mat>&) CV_OVERRIDE {}
-    void forward(std::vector<Mat*>&, std::vector<Mat>&, std::vector<Mat> &) CV_OVERRIDE {}
-    void forward(InputArrayOfArrays inputs, OutputArrayOfArrays outputs, OutputArrayOfArrays internals) CV_OVERRIDE {}
+
+    void forward(InputArrayOfArrays inputs, OutputArrayOfArrays outputs, OutputArrayOfArrays internals) CV_OVERRIDE
+    {
+        CV_TRACE_FUNCTION();
+        CV_TRACE_ARG_VALUE(name, "name", name.c_str());
+
+        CV_OCL_RUN(IS_DNN_OPENCL_TARGET(preferableTarget),
+                   forward_ocl(inputs, outputs, internals));
+
+        Layer::forward_fallback(inputs, outputs, internals);
+    }
+
+    void forward(std::vector<Mat*>&, std::vector<Mat>& outputs, std::vector<Mat> &) CV_OVERRIDE
+    {
+        for (int i = 0; i < inputsData.size(); ++i)
+        {
+            if (inputsData[i].type() == CV_32F && outputs[i].type() == CV_16S)
+            {
+                convertFp16(inputsData[i], outputs[i]);
+            }
+        }
+    }
+
+#ifdef HAVE_OPENCL
+    bool forward_ocl(InputArrayOfArrays, OutputArrayOfArrays outputs_, OutputArrayOfArrays internals_)
+    {
+        if (outputs_.depth() == CV_16S)
+        {
+            std::vector<UMat> outputs;
+            outputs_.getUMatVector(outputs);
+            for (int i = 0; i < inputsData.size(); ++i)
+            {
+                convertFp16(inputsData[i], outputs[i]);
+            }
+        }
+        return true;
+    }
+#endif
 
     int outputNameToIndex(const String& tgtName) CV_OVERRIDE
     {
@@ -421,6 +470,7 @@ struct DataLayer : public Layer
     }
 
     std::vector<String> outNames;
+    std::vector<Mat> inputsData;
 };
 
 struct BlobManager
@@ -497,7 +547,7 @@ public:
         }
     }
 
-    void reuseOrCreate(const MatShape& shape, const LayerPin& lp, Mat& dst, bool forceCreate)
+    void reuseOrCreate(const MatShape& shape, const LayerPin& lp, Mat& dst, bool forceCreate, bool use_half)
     {
         if (!DNN_DISABLE_MEMORY_OPTIMIZATIONS && !forceCreate)
         {
@@ -537,15 +587,15 @@ public:
 
         {
             // if dst already has been allocated with total(shape) elements,
-            // it won't be recrreated and pointer of dst.data remains the same.
-            dst.create(shape, CV_32F);
+            // it won't be recreated and pointer of dst.data remains the same.
+            dst.create(shape, use_half ? CV_16S : CV_32F);
             addHost(lp, dst);
         }
     }
 
     void allocateBlobsForLayer(LayerData &ld, const LayerShapes& layerShapes,
                                std::vector<LayerPin>& pinsForInternalBlobs,
-                               bool forceCreate = false)
+                               bool forceCreate = false, bool use_half = false)
     {
         CV_TRACE_FUNCTION();
 
@@ -616,7 +666,7 @@ public:
                         reuse(ld.inputBlobsId[0], blobPin);
                     }
                     else
-                        reuseOrCreate(shapes[index], blobPin, *blobs[index], forceCreate);
+                        reuseOrCreate(shapes[index], blobPin, *blobs[index], forceCreate, use_half);
                 }
             }
         }
@@ -650,11 +700,11 @@ private:
 
 static Ptr<BackendWrapper> wrapMat(int backendId, int targetId, cv::Mat& m)
 {
-    if (backendId == DNN_BACKEND_DEFAULT)
+    if (backendId == DNN_BACKEND_OPENCV)
     {
         if (targetId == DNN_TARGET_CPU)
             return Ptr<BackendWrapper>();
-        else if (targetId == DNN_TARGET_OPENCL)
+        else if (IS_DNN_OPENCL_TARGET(targetId))
             return OpenCLBackendWrapper::create(m);
         else
             CV_Error(Error::StsNotImplemented, "Unknown target identifier");
@@ -719,10 +769,11 @@ struct Net::Impl
     bool netWasAllocated;
     bool fusion;
     std::vector<int64> layersTimings;
+    Mat output_blob;
 
     Ptr<BackendWrapper> wrap(Mat& host)
     {
-        if (preferableBackend == DNN_BACKEND_DEFAULT && preferableTarget == DNN_TARGET_CPU)
+        if (preferableBackend == DNN_BACKEND_OPENCV && preferableTarget == DNN_TARGET_CPU)
             return Ptr<BackendWrapper>();
 
         MatShape shape(host.dims);
@@ -733,9 +784,9 @@ struct Net::Impl
         if (backendWrappers.find(data) != backendWrappers.end())
         {
             Ptr<BackendWrapper> baseBuffer = backendWrappers[data];
-            if (preferableBackend == DNN_BACKEND_DEFAULT)
+            if (preferableBackend == DNN_BACKEND_OPENCV)
             {
-                CV_Assert(preferableTarget == DNN_TARGET_OPENCL);
+                CV_Assert(IS_DNN_OPENCL_TARGET(preferableTarget));
                 return OpenCLBackendWrapper::create(baseBuffer, host);
             }
             else if (preferableBackend == DNN_BACKEND_HALIDE)
@@ -834,9 +885,6 @@ struct Net::Impl
                 poolingLayer->computeMaxIdx = true;
             }
         }
-        it = layers.find(0);
-        CV_Assert(it != layers.end());
-        it->second.skip = true;
 
         layersTimings.clear();
     }
@@ -845,13 +893,38 @@ struct Net::Impl
     {
         CV_TRACE_FUNCTION();
 
+        if (preferableBackend == DNN_BACKEND_DEFAULT)
+            preferableBackend = (Backend)PARAM_DNN_BACKEND_DEFAULT;
+
+        CV_Assert(preferableBackend != DNN_BACKEND_OPENCV ||
+                  preferableTarget == DNN_TARGET_CPU ||
+                  preferableTarget == DNN_TARGET_OPENCL ||
+                  preferableTarget == DNN_TARGET_OPENCL_FP16);
+        CV_Assert(preferableBackend != DNN_BACKEND_HALIDE ||
+                  preferableTarget == DNN_TARGET_CPU ||
+                  preferableTarget == DNN_TARGET_OPENCL);
+        CV_Assert(preferableBackend != DNN_BACKEND_INFERENCE_ENGINE ||
+                  preferableTarget == DNN_TARGET_CPU ||
+                  preferableTarget == DNN_TARGET_OPENCL ||
+                  preferableTarget == DNN_TARGET_OPENCL_FP16 ||
+                  preferableTarget == DNN_TARGET_MYRIAD);
         if (!netWasAllocated || this->blobsToKeep != blobsToKeep_)
         {
+            if (preferableBackend == DNN_BACKEND_OPENCV && IS_DNN_OPENCL_TARGET(preferableTarget))
 #ifndef HAVE_OPENCL
-            if (preferableBackend == DNN_BACKEND_DEFAULT && preferableTarget == DNN_TARGET_OPENCL)
             {
-                CV_LOG_WARNING(NULL, "DNN: OpenCL target is not available in this OpenCV build, switching to CPU.")
+                CV_LOG_WARNING(NULL, "DNN: OpenCL target is not available in this OpenCV build, switching to CPU.");
                 preferableTarget = DNN_TARGET_CPU;
+            }
+#else
+            {
+                if (!DNN_OPENCL_ALLOW_ALL_DEVICES
+                    && !(ocl::Device::getDefault().isIntel() && ocl::Device::getDefault().type() == ocl::Device::TYPE_GPU) // Current implementation is only valid for Intel GPU (#11494)
+                    )
+                {
+                    CV_LOG_WARNING(NULL, "DNN: OpenCL target is not supported with current OpenCL device (tested with Intel GPUs only), switching to CPU.");
+                    preferableTarget = DNN_TARGET_CPU;
+                }
             }
 #endif
             clear();
@@ -949,52 +1022,26 @@ struct Net::Impl
         ld.inputBlobsId[inNum] = from;
     }
 
-    static void splitPin(const String &pinAlias, String &layerName, String &outName)
-    {
-        size_t delimPos = pinAlias.find('.');
-        layerName = pinAlias.substr(0, delimPos);
-        outName = (delimPos == String::npos) ? String() : pinAlias.substr(delimPos + 1);
-    }
-
     int resolvePinOutputName(LayerData &ld, const String &outName)
     {
         if (outName.empty())
             return 0;
-
-        if (std::isdigit(outName[0]))
-        {
-            char *lastChar;
-            long inum = std::strtol(outName.c_str(), &lastChar, 10);
-
-            if (*lastChar == 0)
-            {
-                CV_Assert(inum == (int)inum);
-                return (int)inum;
-            }
-        }
-
         return ld.getLayerInstance()->outputNameToIndex(outName);
     }
 
-    LayerPin getPinByAlias(const String &pinAlias)
+    LayerPin getPinByAlias(const String &layerName)
     {
         LayerPin pin;
-        String layerName, outName;
-        splitPin(pinAlias, layerName, outName);
-
         pin.lid = (layerName.empty()) ? 0 : getLayerId(layerName);
 
         if (pin.lid >= 0)
-            pin.oid = resolvePinOutputName(getLayerData(pin.lid), outName);
+            pin.oid = resolvePinOutputName(getLayerData(pin.lid), layerName);
 
         return pin;
     }
 
-    std::vector<LayerPin> getLayerOutPins(const String &pinAlias)
+    std::vector<LayerPin> getLayerOutPins(const String &layerName)
     {
-        String layerName, outName;
-        splitPin(pinAlias, layerName, outName);
-
         int lid = (layerName.empty()) ? 0 : getLayerId(layerName);
 
         std::vector<LayerPin> pins;
@@ -1021,8 +1068,8 @@ struct Net::Impl
     void initBackend()
     {
         CV_TRACE_FUNCTION();
-        if (preferableBackend == DNN_BACKEND_DEFAULT)
-            CV_Assert(preferableTarget == DNN_TARGET_CPU || preferableTarget == DNN_TARGET_OPENCL);
+        if (preferableBackend == DNN_BACKEND_OPENCV)
+            CV_Assert(preferableTarget == DNN_TARGET_CPU || IS_DNN_OPENCL_TARGET(preferableTarget));
         else if (preferableBackend == DNN_BACKEND_HALIDE)
             initHalideBackend();
         else if (preferableBackend == DNN_BACKEND_INFERENCE_ENGINE)
@@ -1117,7 +1164,7 @@ struct Net::Impl
                 if (layerNet != ieInpNode->net)
                 {
                     // layerNet is empty or nodes are from different graphs.
-                    ieInpNode->net->addOutput(inpLd.name);
+                    ieInpNode->net->addOutput(ieInpNode->layer->name);
                 }
             }
         }
@@ -1167,7 +1214,9 @@ struct Net::Impl
         for (it = layers.begin(); it != layers.end(); ++it)
         {
             LayerData &ld = it->second;
-            bool fused = ld.skip && ld.id != 0;
+            if (ld.id == 0)
+                continue;
+            bool fused = ld.skip;
 
             Ptr<Layer> layer = ld.layerInstance;
             if (!layer->supportBackend(preferableBackend))
@@ -1244,7 +1293,7 @@ struct Net::Impl
             CV_Assert(!ieNode.empty());
             ieNode->net = net;
 
-            if (preferableTarget == DNN_TARGET_OPENCL_FP16 && !fused)
+            if ((preferableTarget == DNN_TARGET_OPENCL_FP16 || preferableTarget == DNN_TARGET_MYRIAD) && !fused)
             {
                 ieNode->layer->precision = InferenceEngine::Precision::FP16;
                 auto weightableLayer = std::dynamic_pointer_cast<InferenceEngine::WeightableLayer>(ieNode->layer);
@@ -1340,15 +1389,27 @@ struct Net::Impl
             allocateLayer(*i, layersShapes);
 
         //bind inputs
-        ld.inputBlobs.resize(ninputs);
-        ld.inputBlobsWrappers.resize(ninputs);
-        for (size_t i = 0; i < ninputs; i++)
+        if (ld.id == 0)  // DataLayer
         {
-            LayerPin from = ld.inputBlobsId[i];
-            CV_Assert(from.valid());
-            CV_DbgAssert(layers.count(from.lid) && (int)layers[from.lid].outputBlobs.size() > from.oid);
-            ld.inputBlobs[i] = &layers[from.lid].outputBlobs[from.oid];
-            ld.inputBlobsWrappers[i] = layers[from.lid].outputBlobsWrappers[from.oid];
+            ninputs = netInputLayer->inputsData.size();
+            ld.inputBlobsWrappers.resize(ninputs);
+            for (size_t i = 0; i < ninputs; i++)
+            {
+                ld.inputBlobsWrappers[i] = wrap(netInputLayer->inputsData[i]);
+            }
+        }
+        else
+        {
+            ld.inputBlobs.resize(ninputs);
+            ld.inputBlobsWrappers.resize(ninputs);
+            for (size_t i = 0; i < ninputs; i++)
+            {
+                LayerPin from = ld.inputBlobsId[i];
+                CV_Assert(from.valid());
+                CV_DbgAssert(layers.count(from.lid) && (int)layers[from.lid].outputBlobs.size() > from.oid);
+                ld.inputBlobs[i] = &layers[from.lid].outputBlobs[from.oid];
+                ld.inputBlobsWrappers[i] = layers[from.lid].outputBlobsWrappers[from.oid];
+            }
         }
 
         LayersShapesMap::const_iterator layerShapesIt = layersShapes.find(lid);
@@ -1357,7 +1418,9 @@ struct Net::Impl
 
         std::vector<LayerPin> pinsForInternalBlobs;
         blobManager.allocateBlobsForLayer(ld, layerShapesIt->second, pinsForInternalBlobs,
-                                          preferableBackend == DNN_BACKEND_INFERENCE_ENGINE);
+                                          preferableBackend == DNN_BACKEND_INFERENCE_ENGINE,
+                                          preferableBackend == DNN_BACKEND_OPENCV &&
+                                          preferableTarget == DNN_TARGET_OPENCL_FP16);
         ld.outputBlobsWrappers.resize(ld.outputBlobs.size());
         for (int i = 0; i < ld.outputBlobs.size(); ++i)
         {
@@ -1399,7 +1462,7 @@ struct Net::Impl
 
     void fuseLayers(const std::vector<LayerPin>& blobsToKeep_)
     {
-        if( !fusion || preferableBackend != DNN_BACKEND_DEFAULT &&
+        if( !fusion || preferableBackend != DNN_BACKEND_OPENCV &&
                        preferableBackend != DNN_BACKEND_INFERENCE_ENGINE)
             return;
 
@@ -1427,9 +1490,9 @@ struct Net::Impl
             // some other layers.
 
             // TODO: OpenCL target support more fusion styles.
-            if ( preferableBackend == DNN_BACKEND_DEFAULT && preferableTarget == DNN_TARGET_OPENCL &&
+            if ( preferableBackend == DNN_BACKEND_OPENCV && IS_DNN_OPENCL_TARGET(preferableTarget) &&
                  (!cv::ocl::useOpenCL() || (ld.layerInstance->type != "Convolution" &&
-                 ld.layerInstance->type != "MVN")) )
+                 ld.layerInstance->type != "MVN" && ld.layerInstance->type != "Pooling")) )
                 continue;
 
             Ptr<Layer>& currLayer = ld.layerInstance;
@@ -1462,12 +1525,12 @@ struct Net::Impl
                         break;
                 }
 
-                if (preferableBackend != DNN_BACKEND_DEFAULT)
+                if (preferableBackend != DNN_BACKEND_OPENCV)
                     continue;  // Go to the next layer.
 
                 // For now, OpenCL target support fusion with activation of ReLU/ChannelsPReLU/Power/Tanh
-                if ( preferableTarget != DNN_TARGET_OPENCL ||
-                        (preferableTarget == DNN_TARGET_OPENCL &&
+                if ( !IS_DNN_OPENCL_TARGET(preferableTarget) ||
+                     (IS_DNN_OPENCL_TARGET(preferableTarget) &&
                          nextData &&
                         ((nextData->type == "ReLU") ||
                          (nextData->type == "ChannelsPReLU") ||
@@ -1490,7 +1553,7 @@ struct Net::Impl
                         ld.outputBlobs = layers[lpNext.lid].outputBlobs;
                         ld.outputBlobsWrappers = layers[lpNext.lid].outputBlobsWrappers;
 
-                        if ( preferableTarget == DNN_TARGET_OPENCL )
+                        if ( IS_DNN_OPENCL_TARGET(preferableTarget) )
                         {
                             if ( !activData->consumers.empty() )
                             {
@@ -1501,8 +1564,8 @@ struct Net::Impl
                     }
                 }
 
-                // fuse convlution layer followed by eltwise + relu
-                if ( preferableTarget == DNN_TARGET_OPENCL )
+                // fuse convolution layer followed by eltwise + relu
+                if ( IS_DNN_OPENCL_TARGET(preferableTarget) )
                 {
                     Ptr<EltwiseLayer> nextEltwiseLayer;
                     if( nextData )
@@ -1513,10 +1576,12 @@ struct Net::Impl
                         LayerData *eltwiseData = nextData;
                         // go down from the second input and find the first non-skipped layer.
                         LayerData *downLayerData = &layers[eltwiseData->inputBlobsId[1].lid];
+                        CV_Assert(downLayerData);
                         while (downLayerData->skip)
                         {
                             downLayerData = &layers[downLayerData->inputBlobsId[0].lid];
                         }
+                        CV_Assert(downLayerData);
 
                         // second input layer is current layer.
                         if ( ld.id == downLayerData->id )
@@ -1531,9 +1596,7 @@ struct Net::Impl
                                     downLayerData = &layers[downLayerData->inputBlobsId[0].lid];
                             }
 
-                            Ptr<ConvolutionLayer> convLayer;
-                            if( downLayerData )
-                                convLayer = downLayerData->layerInstance.dynamicCast<ConvolutionLayer>();
+                            Ptr<ConvolutionLayer> convLayer = downLayerData->layerInstance.dynamicCast<ConvolutionLayer>();
 
                             //  first input layer is convolution layer
                             if( !convLayer.empty() && eltwiseData->consumers.size() == 1 )
@@ -1605,7 +1668,7 @@ struct Net::Impl
                 }
             }
 
-            if (preferableBackend != DNN_BACKEND_DEFAULT)
+            if (preferableBackend != DNN_BACKEND_OPENCV)
                 continue;  // Go to the next layer.
 
             // the optimization #2. if there is no layer that takes max pooling layer's computed
@@ -1630,7 +1693,7 @@ struct Net::Impl
 
             // the optimization #3. if there is concat layer that concatenates channels
             // from the inputs together (i.e. axis == 1) then we make the inputs of
-            // the concat layer to write to the concatetion output buffer
+            // the concat layer to write to the concatenation output buffer
             // (and so we eliminate the concatenation layer, because the channels
             // are concatenated implicitly).
             Ptr<ConcatLayer> concatLayer = ld.layerInstance.dynamicCast<ConcatLayer>();
@@ -1714,8 +1777,14 @@ struct Net::Impl
         ShapesVec inputShapes;
         for(int i = 0; i < layers[0].outputBlobs.size(); i++)
         {
-            CV_Assert(layers[0].outputBlobs[i].total());
-            inputShapes.push_back(shape(layers[0].outputBlobs[i]));
+            Mat& inp = layers[0].outputBlobs[i];
+            CV_Assert(inp.total());
+            if (preferableBackend == DNN_BACKEND_OPENCV &&
+                preferableTarget == DNN_TARGET_OPENCL_FP16)
+            {
+                layers[0].outputBlobs[i].create(inp.dims, inp.size, CV_16S);
+            }
+            inputShapes.push_back(shape(inp));
         }
         LayersShapesMap layersShapes;
         getLayersShapes(inputShapes, layersShapes);
@@ -1755,12 +1824,12 @@ struct Net::Impl
         TickMeter tm;
         tm.start();
 
-        if (preferableBackend == DNN_BACKEND_DEFAULT ||
+        if (preferableBackend == DNN_BACKEND_OPENCV ||
             !layer->supportBackend(preferableBackend))
         {
             if( !ld.skip )
             {
-                if (preferableBackend == DNN_BACKEND_DEFAULT && preferableTarget == DNN_TARGET_OPENCL)
+                if (preferableBackend == DNN_BACKEND_OPENCV && IS_DNN_OPENCL_TARGET(preferableTarget))
                 {
                     std::vector<UMat> umat_outputBlobs = OpenCLBackendWrapper::getUMatVector(ld.outputBlobsWrappers);
                     layer->forward(OpenCLBackendWrapper::getUMatVector(ld.inputBlobsWrappers),
@@ -1925,7 +1994,14 @@ struct Net::Impl
             // Transfer data to CPU if it's require.
             ld.outputBlobsWrappers[pin.oid]->copyToHost();
         }
-        return ld.outputBlobs[pin.oid];
+
+        if (ld.outputBlobs[pin.oid].depth() == CV_16S)
+        {
+            convertFp16(ld.outputBlobs[pin.oid], output_blob);
+            return output_blob;
+        }
+        else
+            return ld.outputBlobs[pin.oid];
     }
 
     Mat getBlob(String outputName)
@@ -1962,11 +2038,17 @@ Net Net::readFromModelOptimizer(const String& xml, const String& bin)
     backendNode->net = Ptr<InfEngineBackendNet>(new InfEngineBackendNet(ieNet));
     for (auto& it : ieNet.getOutputsInfo())
     {
+        Ptr<Layer> cvLayer(new InfEngineBackendLayer(it.second));
+        InferenceEngine::CNNLayerPtr ieLayer = ieNet.getLayerByName(it.first.c_str());
+        CV_Assert(ieLayer);
+
         LayerParams lp;
         int lid = cvNet.addLayer(it.first, "", lp);
 
         LayerData& ld = cvNet.impl->layers[lid];
-        ld.layerInstance = Ptr<Layer>(new InfEngineBackendLayer(it.second));
+        cvLayer->name = it.first;
+        cvLayer->type = ieLayer->type;
+        ld.layerInstance = cvLayer;
         ld.backendNodes[DNN_BACKEND_INFERENCE_ENGINE] = backendNode;
 
         for (int i = 0; i < inputsNames.size(); ++i)
@@ -1986,12 +2068,6 @@ Net::~Net()
 int Net::addLayer(const String &name, const String &type, LayerParams &params)
 {
     CV_TRACE_FUNCTION();
-
-    if (name.find('.') != String::npos)
-    {
-        CV_Error(Error::StsBadArg, "Added layer name \"" + name + "\" must not contain dot symbol");
-        return -1;
-    }
 
     if (impl->getLayerId(name) >= 0)
     {
@@ -2044,7 +2120,8 @@ Mat Net::forward(const String& outputName)
     if (layerName.empty())
         layerName = getLayerNames().back();
 
-    impl->setUpNet();
+    std::vector<LayerPin> pins(1, impl->getPinByAlias(layerName));
+    impl->setUpNet(pins);
     impl->forwardToLayer(impl->getLayerData(layerName));
 
     return impl->getBlob(layerName);
@@ -2054,13 +2131,13 @@ void Net::forward(OutputArrayOfArrays outputBlobs, const String& outputName)
 {
     CV_TRACE_FUNCTION();
 
-    impl->setUpNet();
-
     String layerName = outputName;
 
     if (layerName.empty())
         layerName = getLayerNames().back();
 
+    std::vector<LayerPin> pins(1, impl->getPinByAlias(layerName));
+    impl->setUpNet(pins);
     impl->forwardToLayer(impl->getLayerData(layerName));
 
     LayerPin pin = impl->getPinByAlias(layerName);
@@ -2068,7 +2145,7 @@ void Net::forward(OutputArrayOfArrays outputBlobs, const String& outputName)
 
     if (outputBlobs.isUMat())
     {
-        outputBlobs.assign(ld.outputBlobs[pin.oid].getUMat(ACCESS_RW));
+        outputBlobs.assign(impl->getBlob(layerName).getUMat(ACCESS_RW));
     }
     else if (outputBlobs.isMat())
     {
@@ -2084,17 +2161,33 @@ void Net::forward(OutputArrayOfArrays outputBlobs, const String& outputName)
                 ld.outputBlobsWrappers[i]->copyToHost();
             }
         }
-        std::vector<Mat> & outputvec = *(std::vector<Mat> *)outputBlobs.getObj();
-        outputvec = ld.outputBlobs;
+        if (ld.outputBlobs[0].depth() == CV_32F)
+        {
+            std::vector<Mat> & outputvec = *(std::vector<Mat> *)outputBlobs.getObj();
+            outputvec = ld.outputBlobs;
+        } else {
+            std::vector<Mat> & outputvec = *(std::vector<Mat> *)outputBlobs.getObj();
+            outputvec.resize(ld.outputBlobs.size());
+            for (int i = 0; i < outputvec.size(); i++)
+                convertFp16(ld.outputBlobs[i], outputvec[i]);
+        }
     }
     else if (outputBlobs.isUMatVector())
     {
         std::vector<UMat> & outputvec = *(std::vector<UMat> *)outputBlobs.getObj();
 
-        if (impl->preferableBackend == DNN_BACKEND_DEFAULT &&
-            impl->preferableTarget == DNN_TARGET_OPENCL)
+        if (impl->preferableBackend == DNN_BACKEND_OPENCV &&
+            IS_DNN_OPENCL_TARGET(impl->preferableTarget))
         {
-            outputvec = OpenCLBackendWrapper::getUMatVector(ld.outputBlobsWrappers);
+            if (impl->preferableTarget == DNN_TARGET_OPENCL)
+                outputvec = OpenCLBackendWrapper::getUMatVector(ld.outputBlobsWrappers);
+            else if (impl->preferableTarget == DNN_TARGET_OPENCL_FP16)
+            {
+                std::vector<UMat> out_vec = OpenCLBackendWrapper::getUMatVector(ld.outputBlobsWrappers);
+                outputvec.resize(out_vec.size());
+                for (int i = 0; i < out_vec.size(); i++)
+                    convertFp16(out_vec[i], outputvec[i]);
+            }
         }
         else
         {
@@ -2182,6 +2275,22 @@ void Net::setPreferableTarget(int targetId)
     if( impl->preferableTarget != targetId )
     {
         impl->preferableTarget = targetId;
+        if (IS_DNN_OPENCL_TARGET(targetId))
+        {
+#ifndef HAVE_OPENCL
+#ifdef HAVE_INF_ENGINE
+            if (impl->preferableBackend == DNN_BACKEND_OPENCV)
+#else
+            if (impl->preferableBackend == DNN_BACKEND_DEFAULT ||
+                impl->preferableBackend == DNN_BACKEND_OPENCV)
+#endif  // HAVE_INF_ENGINE
+                impl->preferableTarget = DNN_TARGET_CPU;
+#else
+            bool fp16 = ocl::Device::getDefault().isExtensionSupported("cl_khr_fp16");
+            if (!fp16 && targetId == DNN_TARGET_OPENCL_FP16)
+                impl->preferableTarget = DNN_TARGET_OPENCL;
+#endif
+        }
         impl->netWasAllocated = false;
         impl->clear();
     }
@@ -2207,18 +2316,22 @@ void Net::setInput(InputArray blob, const String& name)
         CV_Error(Error::StsObjectNotFound, "Requested blob \"" + name + "\" not found");
 
     LayerData &ld = impl->layers[pin.lid];
-    ld.outputBlobs.resize( std::max(pin.oid+1, (int)ld.requiredOutputs.size()) );
-    ld.outputBlobsWrappers.resize(ld.outputBlobs.size());
-    MatShape prevShape = shape(ld.outputBlobs[pin.oid]);
+    const int numInputs = std::max(pin.oid+1, (int)ld.requiredOutputs.size());
+    ld.outputBlobs.resize(numInputs);
+    ld.outputBlobsWrappers.resize(numInputs);
+    impl->netInputLayer->inputsData.resize(numInputs);
+
+    MatShape prevShape = shape(impl->netInputLayer->inputsData[pin.oid]);
     Mat blob_ = blob.getMat();
     bool oldShape = prevShape == shape(blob_);
     if (oldShape)
     {
-        blob_.copyTo(ld.outputBlobs[pin.oid]);
+        blob_.copyTo(impl->netInputLayer->inputsData[pin.oid]);
     }
     else
     {
         ld.outputBlobs[pin.oid] = blob_.clone();
+        impl->netInputLayer->inputsData[pin.oid] = ld.outputBlobs[pin.oid];
     }
 
     if (!ld.outputBlobsWrappers[pin.oid].empty())
@@ -2590,12 +2703,12 @@ int Layer::inputNameToIndex(String)
 
 int Layer::outputNameToIndex(const String&)
 {
-    return -1;
+    return 0;
 }
 
 bool Layer::supportBackend(int backendId)
 {
-    return backendId == DNN_BACKEND_DEFAULT;
+    return backendId == DNN_BACKEND_OPENCV;
 }
 
 Ptr<BackendNode> Layer::initHalide(const std::vector<Ptr<BackendWrapper> > &)
@@ -2656,9 +2769,9 @@ void Layer::applyHalideScheduler(Ptr<BackendNode>& node, const std::vector<Mat*>
     }
     else if (targetId == DNN_TARGET_OPENCL)
     {
-        int c_split = outC > 8 ? (outC > 16 ? 8 : 4) : outC;
         if (outW == 1 && outH == 1)
         {
+            int c_split = outC > 8 ? (outC > 16 ? 8 : 4) : outC;
             top.split(c, co, ci, c_split)
                .fuse(x, y, tile).fuse(co, tile, tile).fuse(n, tile, tile)
                .gpu_blocks(tile)
@@ -2668,6 +2781,8 @@ void Layer::applyHalideScheduler(Ptr<BackendNode>& node, const std::vector<Mat*>
         {
             int x_split = outW > 8 ? (outW >= 32 ? 16 : 8) : outW;
             int y_split = outH > 8 ? (outH >= 32 ? 16 : 8) : outH;
+            // Supported vectorization widths: 2, 3, 4, 8, 16
+            int c_split = outC > 8 ? (outC > 16 ? 8 : 4) : std::min(4, outC);
             top.split(x, xo, xi, x_split).split(y, yo, yi, y_split)
                .split(c, co, ci, c_split)
                .gpu_blocks(xo, yo, co)
@@ -2734,6 +2849,43 @@ void Layer::forward_fallback(InputArrayOfArrays inputs_arr, OutputArrayOfArrays 
 {
     CV_TRACE_FUNCTION();
     CV_TRACE_ARG_VALUE(name, "name", name.c_str());
+
+    if (preferableTarget == DNN_TARGET_OPENCL_FP16 && inputs_arr.depth() == CV_16S)
+    {
+        std::vector<UMat> inputs;
+        std::vector<UMat> outputs;
+        std::vector<UMat> internals;
+
+        std::vector<UMat> orig_inputs;
+        std::vector<UMat> orig_outputs;
+        std::vector<UMat> orig_internals;
+
+        inputs_arr.getUMatVector(orig_inputs);
+        outputs_arr.getUMatVector(orig_outputs);
+        internals_arr.getUMatVector(orig_internals);
+
+        inputs.resize(orig_inputs.size());
+        for (size_t i = 0; i < orig_inputs.size(); i++)
+            convertFp16(orig_inputs[i], inputs[i]);
+
+        outputs.resize(orig_outputs.size());
+        for (size_t i = 0; i < orig_outputs.size(); i++)
+            outputs[i].create(shape(orig_outputs[i]), CV_32F);
+
+        internals.resize(orig_internals.size());
+        for (size_t i = 0; i < orig_internals.size(); i++)
+            internals[i].create(shape(orig_internals[i]), CV_32F);
+
+        forward(inputs, outputs, internals);
+
+        for (size_t i = 0; i < outputs.size(); i++)
+            convertFp16(outputs[i], orig_outputs[i]);
+
+        // sync results back
+        outputs_arr.assign(orig_outputs);
+        internals_arr.assign(orig_internals);
+        return;
+    }
 
     std::vector<Mat> inpvec;
     std::vector<Mat> outputs;

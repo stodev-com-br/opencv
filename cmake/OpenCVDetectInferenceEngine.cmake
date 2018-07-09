@@ -27,7 +27,7 @@ if(NOT INF_ENGINE_ROOT_DIR OR NOT EXISTS "${INF_ENGINE_ROOT_DIR}/include/inferen
         list(APPEND ie_root_paths "${INTEL_CVSDK_DIR}/inference_engine")
     endif()
 
-    if(WITH_INF_ENGINE AND NOT ie_root_paths)
+    if(NOT ie_root_paths)
         list(APPEND ie_root_paths "/opt/intel/deeplearning_deploymenttoolkit/deployment_tools/inference_engine")
     endif()
 
@@ -38,8 +38,7 @@ set(INF_ENGINE_INCLUDE_DIRS "${INF_ENGINE_ROOT_DIR}/include" CACHE PATH "Path to
 
 if(NOT INF_ENGINE_ROOT_DIR
     OR NOT EXISTS "${INF_ENGINE_ROOT_DIR}"
-    OR NOT EXISTS "${INF_ENGINE_INCLUDE_DIRS}"
-    OR NOT EXISTS "${INF_ENGINE_INCLUDE_DIRS}/inference_engine.hpp"
+    OR NOT EXISTS "${INF_ENGINE_ROOT_DIR}/include/inference_engine.hpp"
 )
     ie_fail()
 endif()
@@ -49,10 +48,7 @@ set(INF_ENGINE_LIBRARIES "")
 set(ie_lib_list inference_engine)
 
 link_directories(
-  ${INTEL_CVSDK_DIR}/external/mklml_lnx/lib
-  ${INTEL_CVSDK_DIR}/inference_engine/external/mklml_lnx/lib
   ${INTEL_CVSDK_DIR}/inference_engine/external/mkltiny_lnx/lib
-  ${INTEL_CVSDK_DIR}/external/cldnn/lib
   ${INTEL_CVSDK_DIR}/inference_engine/external/cldnn/lib
 )
 

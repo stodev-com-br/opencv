@@ -18,7 +18,7 @@ def execute(cmd, shell=False):
         log.info('Executing: ' + ' '.join(cmd))
         retcode = subprocess.call(cmd, shell=shell)
         if retcode < 0:
-            raise Fail("Child was terminated by signal:" %s -retcode)
+            raise Fail("Child was terminated by signal: %s" % -retcode)
         elif retcode > 0:
             raise Fail("Child returned: %s" % retcode)
     except OSError as e:
@@ -206,7 +206,7 @@ class Builder:
         # Add extra data
         apkxmldest = check_dir(os.path.join(apkdest, "res", "xml"), create=True)
         apklibdest = check_dir(os.path.join(apkdest, "libs", abi.name), create=True)
-        for ver, d in self.extra_packs + [("3.4.1", os.path.join(self.libdest, "lib"))]:
+        for ver, d in self.extra_packs + [("3.4.2", os.path.join(self.libdest, "lib"))]:
             r = ET.Element("library", attrib={"version": ver})
             log.info("Adding libraries from %s", d)
 
@@ -335,6 +335,7 @@ if __name__ == "__main__":
     print(cfg.strip())
     print('=' * 80)
 
+    ABIs = None  # make flake8 happy
     exec(compile(cfg, cpath, 'exec'))
 
     log.info("Android NDK path: %s", os.environ["ANDROID_NDK"])

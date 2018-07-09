@@ -46,7 +46,9 @@ public:
 
     virtual InferenceEngine::InputInfo::Ptr getInput(const std::string &inputName) noexcept CV_OVERRIDE;
 
-    virtual void getName(char *pName, size_t len) noexcept CV_OVERRIDE;
+    virtual void getName(char *pName, size_t len) noexcept;
+
+    virtual void getName(char *pName, size_t len) const noexcept;
 
     virtual size_t layerCount() noexcept CV_OVERRIDE;
 
@@ -87,7 +89,10 @@ private:
     InferenceEngine::BlobMap allBlobs;
     InferenceEngine::TargetDevice targetDevice;
     InferenceEngine::Precision precision;
-    InferenceEngine::InferenceEnginePluginPtr plugin;
+    InferenceEngine::InferenceEnginePluginPtr enginePtr;
+    InferenceEngine::InferencePlugin plugin;
+    InferenceEngine::ExecutableNetwork netExec;
+    InferenceEngine::InferRequest infRequest;
 
     void initPlugin(InferenceEngine::ICNNNetwork& net);
 };

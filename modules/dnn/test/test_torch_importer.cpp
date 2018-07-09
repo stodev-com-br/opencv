@@ -77,7 +77,7 @@ static void runTorchNet(String prefix, int targetId = DNN_TARGET_CPU, String out
     Net net = readNetFromTorch(_tf(prefix + "_net" + suffix), isBinary);
     ASSERT_FALSE(net.empty());
 
-    net.setPreferableBackend(DNN_BACKEND_DEFAULT);
+    net.setPreferableBackend(DNN_BACKEND_OPENCV);
     net.setPreferableTarget(targetId);
 
     Mat inp, outRef;
@@ -87,7 +87,7 @@ static void runTorchNet(String prefix, int targetId = DNN_TARGET_CPU, String out
     if (outLayerName.empty())
         outLayerName = net.getLayerNames().back();
 
-    net.setInput(inp, "0");
+    net.setInput(inp);
     std::vector<Mat> outBlobs;
     net.forward(outBlobs, outLayerName);
     normAssert(outRef, outBlobs[0]);
@@ -215,6 +215,7 @@ TEST_P(Test_Torch_nets, OpenFace_accuracy)
     const string model = findDataFile("dnn/openface_nn4.small2.v1.t7", false);
     Net net = readNetFromTorch(model);
 
+    net.setPreferableBackend(DNN_BACKEND_OPENCV);
     net.setPreferableTarget(GetParam());
 
     Mat sample = imread(findDataFile("cv/shared/lena.png", false));
@@ -241,6 +242,7 @@ TEST_P(Test_Torch_nets, ENet_accuracy)
         ASSERT_TRUE(!net.empty());
     }
 
+    net.setPreferableBackend(DNN_BACKEND_OPENCV);
     net.setPreferableTarget(GetParam());
 
     Mat sample = imread(_tf("street.png", false));
@@ -250,7 +252,7 @@ TEST_P(Test_Torch_nets, ENet_accuracy)
     Mat out = net.forward();
     Mat ref = blobFromNPY(_tf("torch_enet_prob.npy", false));
     // Due to numerical instability in Pooling-Unpooling layers (indexes jittering)
-    // thresholds for ENet must be changed. Accuracy of resuults was checked on
+    // thresholds for ENet must be changed. Accuracy of results was checked on
     // Cityscapes dataset and difference in mIOU with Torch is 10E-4%
     normAssert(ref, out, "", 0.00044, 0.44);
 
@@ -287,6 +289,7 @@ TEST_P(Test_Torch_nets, FastNeuralStyle_accuracy)
         const string model = findDataFile(models[i], false);
         Net net = readNetFromTorch(model);
 
+        net.setPreferableBackend(DNN_BACKEND_OPENCV);
         net.setPreferableTarget(GetParam());
 
         Mat img = imread(findDataFile("dnn/googlenet_1.png", false));
