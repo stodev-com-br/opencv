@@ -103,6 +103,7 @@ using std::pair;
 using std::make_pair;
 using testing::TestWithParam;
 using testing::Values;
+using testing::ValuesIn;
 using testing::Combine;
 
 using cv::Mat;
@@ -378,10 +379,9 @@ struct TSParams
 
 class TS
 {
-public:
-    // constructor(s) and destructor
     TS();
     virtual ~TS();
+public:
 
     enum
     {
@@ -482,9 +482,6 @@ public:
         // needs to be run, so this code should not occur.
         SKIPPED=1
     };
-
-    // get file storage
-    CvFileStorage* get_file_storage();
 
     // get RNG to generate random input data for a test
     RNG& get_rng() { return rng; }
@@ -628,9 +625,6 @@ struct DefaultRngAuto
 void fillGradient(Mat& img, int delta = 5);
 void smoothBorder(Mat& img, const Scalar& color, int delta = 3);
 
-void printVersionInfo(bool useStdOut = true);
-
-
 // Utility functions
 
 void addDataSearchPath(const std::string& path);
@@ -654,6 +648,18 @@ void addDataSearchSubDirectory(const std::string& subdir);
  */
 std::string findDataFile(const std::string& relative_path, bool required = true);
 
+/*! @brief Try to find requested data directory
+@sa findDataFile
+ */
+std::string findDataDirectory(const std::string& relative_path, bool required = true);
+
+// Test definitions
+
+class SystemInfoCollector : public testing::EmptyTestEventListener
+{
+private:
+    virtual void OnTestProgramStart(const testing::UnitTest&);
+};
 
 #ifndef __CV_TEST_EXEC_ARGS
 #if defined(_MSC_VER) && (_MSC_VER <= 1400)
@@ -663,15 +669,6 @@ std::string findDataFile(const std::string& relative_path, bool required = true)
 #define __CV_TEST_EXEC_ARGS(...)    \
     __VA_ARGS__;
 #endif
-#endif
-
-#ifdef HAVE_OPENCL
-namespace ocl {
-void dumpOpenCLDevice();
-}
-#define TEST_DUMP_OCL_INFO cvtest::ocl::dumpOpenCLDevice();
-#else
-#define TEST_DUMP_OCL_INFO
 #endif
 
 void parseCustomOptions(int argc, char **argv);
@@ -690,8 +687,7 @@ int main(int argc, char **argv) \
     ts->init(resourcesubdir); \
     __CV_TEST_EXEC_ARGS(CV_TEST_INIT0_ ## INIT0) \
     ::testing::InitGoogleTest(&argc, argv); \
-    cvtest::printVersionInfo(); \
-    TEST_DUMP_OCL_INFO \
+    ::testing::UnitTest::GetInstance()->listeners().Append(new SystemInfoCollector); \
     __CV_TEST_EXEC_ARGS(__VA_ARGS__) \
     parseCustomOptions(argc, argv); \
     } \

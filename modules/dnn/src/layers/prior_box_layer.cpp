@@ -254,7 +254,7 @@ public:
         }
         if (params.has("offset_h") || params.has("offset_w"))
         {
-            CV_Assert(!params.has("offset"), params.has("offset_h"), params.has("offset_w"));
+            CV_Assert_N(!params.has("offset"), params.has("offset_h"), params.has("offset_w"));
             getParams("offset_h", params, &_offsetsY);
             getParams("offset_w", params, &_offsetsX);
             CV_Assert(_offsetsX.size() == _offsetsY.size());
@@ -299,7 +299,8 @@ public:
 
     void finalize(const std::vector<Mat*> &inputs, std::vector<Mat> &outputs) CV_OVERRIDE
     {
-        CV_Assert(inputs.size() > 1, inputs[0]->dims == 4, inputs[1]->dims == 4);
+        CV_CheckGT(inputs.size(), (size_t)1, "");
+        CV_CheckEQ(inputs[0]->dims, 4, ""); CV_CheckEQ(inputs[1]->dims, 4, "");
         int layerWidth = inputs[0]->size[3];
         int layerHeight = inputs[0]->size[2];
 
@@ -369,15 +370,11 @@ public:
         // clip the prior's coordinate such that it is within [0, 1]
         if (_clip)
         {
-            Mat mat = outputs[0].getMat(ACCESS_READ);
-            int aspect_count = (_maxSize > 0) ? 1 : 0;
-            int offset = nthreads * 4 * _offsetsX.size() * (1 + aspect_count + _aspectRatios.size());
-            float* outputPtr = mat.ptr<float>() + offset;
-            int _outChannelSize = _layerHeight * _layerWidth * _numPriors * 4;
-            for (size_t d = 0; d < _outChannelSize; ++d)
-            {
-                outputPtr[d] = std::min<float>(std::max<float>(outputPtr[d], 0.), 1.);
-            }
+            ocl::Kernel kernel("clip", ocl::dnn::prior_box_oclsrc, opts);
+            size_t nthreads = _layerHeight * _layerWidth * _numPriors * 4;
+            if (!kernel.args((int)nthreads, ocl::KernelArg::PtrReadWrite(outputs[0]))
+                       .run(1, &nthreads, NULL, false))
+                return false;
         }
 
         // set the variance.
@@ -490,8 +487,8 @@ public:
 
         if (_explicitSizes)
         {
-            CV_Assert(!_boxWidths.empty(), !_boxHeights.empty(),
-                      _boxWidths.size() == _boxHeights.size());
+            CV_Assert(!_boxWidths.empty()); CV_Assert(!_boxHeights.empty());
+            CV_Assert(_boxWidths.size() == _boxHeights.size());
             ieLayer->params["width"] = format("%f", _boxWidths[0]);
             ieLayer->params["height"] = format("%f", _boxHeights[0]);
             for (int i = 1; i < _boxWidths.size(); ++i)
@@ -533,7 +530,7 @@ public:
             ieLayer->params["step_h"] = format("%f", _stepY);
             ieLayer->params["step_w"] = format("%f", _stepX);
         }
-        CV_Assert(_offsetsX.size() == 1, _offsetsY.size() == 1, _offsetsX[0] == _offsetsY[0]);
+        CV_CheckEQ(_offsetsX.size(), (size_t)1, ""); CV_CheckEQ(_offsetsY.size(), (size_t)1, ""); CV_CheckEQ(_offsetsX[0], _offsetsY[0], "");
         ieLayer->params["offset"] = format("%f", _offsetsX[0]);
 
         return Ptr<BackendNode>(new InfEngineBackendNode(ieLayer));

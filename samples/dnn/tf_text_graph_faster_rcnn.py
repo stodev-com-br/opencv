@@ -6,6 +6,8 @@ from tensorflow.core.framework.node_def_pb2 import NodeDef
 from tensorflow.tools.graph_transforms import TransformGraph
 from google.protobuf import text_format
 
+from tf_text_graph_common import *
+
 parser = argparse.ArgumentParser(description='Run this script to get a text graph of '
                                              'SSD model from TensorFlow Object Detection API. '
                                              'Then pass it with .pb file to cv::dnn::readNetFromTensorflow function.')
@@ -35,50 +37,17 @@ scopesToIgnore = ('FirstStageFeatureExtractor/Assert',
                   'FirstStageFeatureExtractor/GreaterEqual',
                   'FirstStageFeatureExtractor/LogicalAnd')
 
-unusedAttrs = ['T', 'Tshape', 'N', 'Tidx', 'Tdim', 'use_cudnn_on_gpu',
-               'Index', 'Tperm', 'is_training', 'Tpaddings']
-
 # Read the graph.
 with tf.gfile.FastGFile(args.input, 'rb') as f:
     graph_def = tf.GraphDef()
     graph_def.ParseFromString(f.read())
 
-# Removes Identity nodes
-def removeIdentity():
-    identities = {}
-    for node in graph_def.node:
-        if node.op == 'Identity':
-            identities[node.name] = node.input[0]
-            graph_def.node.remove(node)
+removeIdentity(graph_def)
 
-    for node in graph_def.node:
-        for i in range(len(node.input)):
-            if node.input[i] in identities:
-                node.input[i] = identities[node.input[i]]
+def to_remove(name, op):
+    return name.startswith(scopesToIgnore) or not name.startswith(scopesToKeep)
 
-removeIdentity()
-
-removedNodes = []
-
-for i in reversed(range(len(graph_def.node))):
-    op = graph_def.node[i].op
-    name = graph_def.node[i].name
-
-    if op == 'Const' or name.startswith(scopesToIgnore) or not name.startswith(scopesToKeep):
-        if op != 'Const':
-            removedNodes.append(name)
-
-        del graph_def.node[i]
-    else:
-        for attr in unusedAttrs:
-            if attr in graph_def.node[i].attr:
-                del graph_def.node[i].attr[attr]
-
-# Remove references to removed nodes except Const nodes.
-for node in graph_def.node:
-    for i in reversed(range(len(node.input))):
-        if node.input[i] in removedNodes:
-            del node.input[i]
+removeUnusedNodesAndAttrs(to_remove, graph_def)
 
 
 # Connect input node to the first layer
@@ -93,75 +62,18 @@ while True:
     if node.op == 'CropAndResize':
         break
 
-def tensorMsg(values):
-    if all([isinstance(v, float) for v in values]):
-        dtype = 'DT_FLOAT'
-        field = 'float_val'
-    elif all([isinstance(v, int) for v in values]):
-        dtype = 'DT_INT32'
-        field = 'int_val'
-    else:
-        raise Exception('Wrong values types')
-
-    msg = 'tensor { dtype: ' + dtype + ' tensor_shape { dim { size: %d } }' % len(values)
-    for value in values:
-        msg += '%s: %s ' % (field, str(value))
-    return msg + '}'
-
-def addSlice(inp, out, begins, sizes):
-    beginsNode = NodeDef()
-    beginsNode.name = out + '/begins'
-    beginsNode.op = 'Const'
-    text_format.Merge(tensorMsg(begins), beginsNode.attr["value"])
-    graph_def.node.extend([beginsNode])
-
-    sizesNode = NodeDef()
-    sizesNode.name = out + '/sizes'
-    sizesNode.op = 'Const'
-    text_format.Merge(tensorMsg(sizes), sizesNode.attr["value"])
-    graph_def.node.extend([sizesNode])
-
-    sliced = NodeDef()
-    sliced.name = out
-    sliced.op = 'Slice'
-    sliced.input.append(inp)
-    sliced.input.append(beginsNode.name)
-    sliced.input.append(sizesNode.name)
-    graph_def.node.extend([sliced])
-
-def addReshape(inp, out, shape):
-    shapeNode = NodeDef()
-    shapeNode.name = out + '/shape'
-    shapeNode.op = 'Const'
-    text_format.Merge(tensorMsg(shape), shapeNode.attr["value"])
-    graph_def.node.extend([shapeNode])
-
-    reshape = NodeDef()
-    reshape.name = out
-    reshape.op = 'Reshape'
-    reshape.input.append(inp)
-    reshape.input.append(shapeNode.name)
-    graph_def.node.extend([reshape])
-
-def addSoftMax(inp, out):
-    softmax = NodeDef()
-    softmax.name = out
-    softmax.op = 'Softmax'
-    text_format.Merge('i: -1', softmax.attr['axis'])
-    softmax.input.append(inp)
-    graph_def.node.extend([softmax])
-
 addReshape('FirstStageBoxPredictor/ClassPredictor/BiasAdd',
-           'FirstStageBoxPredictor/ClassPredictor/reshape_1', [0, -1, 2])
+           'FirstStageBoxPredictor/ClassPredictor/reshape_1', [0, -1, 2], graph_def)
 
 addSoftMax('FirstStageBoxPredictor/ClassPredictor/reshape_1',
-           'FirstStageBoxPredictor/ClassPredictor/softmax')  # Compare with Reshape_4
+           'FirstStageBoxPredictor/ClassPredictor/softmax', graph_def)  # Compare with Reshape_4
 
-flatten = NodeDef()
-flatten.name = 'FirstStageBoxPredictor/BoxEncodingPredictor/flatten'  # Compare with FirstStageBoxPredictor/BoxEncodingPredictor/BiasAdd
-flatten.op = 'Flatten'
-flatten.input.append('FirstStageBoxPredictor/BoxEncodingPredictor/BiasAdd')
-graph_def.node.extend([flatten])
+addFlatten('FirstStageBoxPredictor/ClassPredictor/softmax',
+           'FirstStageBoxPredictor/ClassPredictor/softmax/flatten', graph_def)
+
+# Compare with FirstStageBoxPredictor/BoxEncodingPredictor/BiasAdd
+addFlatten('FirstStageBoxPredictor/BoxEncodingPredictor/BiasAdd',
+           'FirstStageBoxPredictor/BoxEncodingPredictor/flatten', graph_def)
 
 proposals = NodeDef()
 proposals.name = 'proposals'  # Compare with ClipToWindow/Gather/Gather (NOTE: normalized)
@@ -194,7 +106,7 @@ detectionOut.name = 'detection_out'
 detectionOut.op = 'DetectionOutput'
 
 detectionOut.input.append('FirstStageBoxPredictor/BoxEncodingPredictor/flatten')
-detectionOut.input.append('FirstStageBoxPredictor/ClassPredictor/softmax')
+detectionOut.input.append('FirstStageBoxPredictor/ClassPredictor/softmax/flatten')
 detectionOut.input.append('proposals')
 
 text_format.Merge('i: 2', detectionOut.attr['num_classes'])
@@ -204,38 +116,44 @@ text_format.Merge('f: 0.7', detectionOut.attr['nms_threshold'])
 text_format.Merge('i: 6000', detectionOut.attr['top_k'])
 text_format.Merge('s: "CENTER_SIZE"', detectionOut.attr['code_type'])
 text_format.Merge('i: 100', detectionOut.attr['keep_top_k'])
-text_format.Merge('b: true', detectionOut.attr['clip'])
-text_format.Merge('b: true', detectionOut.attr['loc_pred_transposed'])
+text_format.Merge('b: false', detectionOut.attr['clip'])
 
 graph_def.node.extend([detectionOut])
+
+addConstNode('clip_by_value/lower', [0.0], graph_def)
+addConstNode('clip_by_value/upper', [1.0], graph_def)
+
+clipByValueNode = NodeDef()
+clipByValueNode.name = 'detection_out/clip_by_value'
+clipByValueNode.op = 'ClipByValue'
+clipByValueNode.input.append('detection_out')
+clipByValueNode.input.append('clip_by_value/lower')
+clipByValueNode.input.append('clip_by_value/upper')
+graph_def.node.extend([clipByValueNode])
 
 # Save as text.
 for node in reversed(topNodes):
     graph_def.node.extend([node])
 
-addSoftMax('SecondStageBoxPredictor/Reshape_1', 'SecondStageBoxPredictor/Reshape_1/softmax')
+addSoftMax('SecondStageBoxPredictor/Reshape_1', 'SecondStageBoxPredictor/Reshape_1/softmax', graph_def)
 
 addSlice('SecondStageBoxPredictor/Reshape_1/softmax',
          'SecondStageBoxPredictor/Reshape_1/slice',
-         [0, 0, 1], [-1, -1, -1])
+         [0, 0, 1], [-1, -1, -1], graph_def)
 
 addReshape('SecondStageBoxPredictor/Reshape_1/slice',
-          'SecondStageBoxPredictor/Reshape_1/Reshape', [1, -1])
+          'SecondStageBoxPredictor/Reshape_1/Reshape', [1, -1], graph_def)
 
 # Replace Flatten subgraph onto a single node.
 for i in reversed(range(len(graph_def.node))):
     if graph_def.node[i].op == 'CropAndResize':
-        graph_def.node[i].input.insert(1, 'detection_out')
+        graph_def.node[i].input.insert(1, 'detection_out/clip_by_value')
 
     if graph_def.node[i].name == 'SecondStageBoxPredictor/Reshape':
-        shapeNode = NodeDef()
-        shapeNode.name = 'SecondStageBoxPredictor/Reshape/shape2'
-        shapeNode.op = 'Const'
-        text_format.Merge(tensorMsg([1, -1, 4]), shapeNode.attr["value"])
-        graph_def.node.extend([shapeNode])
+        addConstNode('SecondStageBoxPredictor/Reshape/shape2', [1, -1, 4], graph_def)
 
         graph_def.node[i].input.pop()
-        graph_def.node[i].input.append(shapeNode.name)
+        graph_def.node[i].input.append('SecondStageBoxPredictor/Reshape/shape2')
 
     if graph_def.node[i].name in ['SecondStageBoxPredictor/Flatten/flatten/Shape',
                                   'SecondStageBoxPredictor/Flatten/flatten/strided_slice',
@@ -246,12 +164,15 @@ for node in graph_def.node:
     if node.name == 'SecondStageBoxPredictor/Flatten/flatten/Reshape':
         node.op = 'Flatten'
         node.input.pop()
-        break
+
+    if node.name in ['FirstStageBoxPredictor/BoxEncodingPredictor/Conv2D',
+                     'SecondStageBoxPredictor/BoxEncodingPredictor/MatMul']:
+        text_format.Merge('b: true', node.attr["loc_pred_transposed"])
 
 ################################################################################
 ### Postprocessing
 ################################################################################
-addSlice('detection_out', 'detection_out/slice', [0, 0, 0, 3], [-1, -1, -1, 4])
+addSlice('detection_out/clip_by_value', 'detection_out/slice', [0, 0, 0, 3], [-1, -1, -1, 4], graph_def)
 
 variance = NodeDef()
 variance.name = 'proposals/variance'
@@ -267,13 +188,14 @@ varianceEncoder.input.append(variance.name)
 text_format.Merge('i: 2', varianceEncoder.attr["axis"])
 graph_def.node.extend([varianceEncoder])
 
-addReshape('detection_out/slice', 'detection_out/slice/reshape', [1, 1, -1])
+addReshape('detection_out/slice', 'detection_out/slice/reshape', [1, 1, -1], graph_def)
+addFlatten('variance_encoded', 'variance_encoded/flatten', graph_def)
 
 detectionOut = NodeDef()
 detectionOut.name = 'detection_out_final'
 detectionOut.op = 'DetectionOutput'
 
-detectionOut.input.append('variance_encoded')
+detectionOut.input.append('variance_encoded/flatten')
 detectionOut.input.append('SecondStageBoxPredictor/Reshape_1/Reshape')
 detectionOut.input.append('detection_out/slice/reshape')
 
@@ -283,7 +205,6 @@ text_format.Merge('i: %d' % (args.num_classes + 1), detectionOut.attr['backgroun
 text_format.Merge('f: 0.6', detectionOut.attr['nms_threshold'])
 text_format.Merge('s: "CENTER_SIZE"', detectionOut.attr['code_type'])
 text_format.Merge('i: 100', detectionOut.attr['keep_top_k'])
-text_format.Merge('b: true', detectionOut.attr['loc_pred_transposed'])
 text_format.Merge('b: true', detectionOut.attr['clip'])
 text_format.Merge('b: true', detectionOut.attr['variance_encoded_in_target'])
 graph_def.node.extend([detectionOut])

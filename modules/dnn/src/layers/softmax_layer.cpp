@@ -110,27 +110,26 @@ public:
         outputs_.getUMatVector(outputs);
         internals_.getUMatVector(internals);
 
+        UMat& src = inputs[0];
+        UMat& dstMat = outputs[0];
+        int axis = clamp(axisRaw, src.dims);
+
         if (softmaxOp.empty())
         {
             OCL4DNNSoftmaxConfig config;
-
             config.in_shape = shape(inputs[0]);
-            config.axis = axisRaw;
-            config.channels = inputs[0].size[axisRaw];
+            config.axis = axis;
+            config.channels = inputs[0].size[axis];
             config.logsoftmax = logSoftMax;
             config.use_half = use_half;
 
             softmaxOp = Ptr<OCL4DNNSoftmax<float> >(new OCL4DNNSoftmax<float>(config));
         }
 
-        UMat& src = inputs[0];
-        UMat& dstMat = outputs[0];
-
         if (softmaxOp->Forward(src, dstMat))
             return true;
 
         UMat& bufMat = internals[0];
-        int axis = clamp(axisRaw, src.dims);
         MatShape s = shape(src);
         size_t outerSize = total(s, 0, axis);
         size_t channels = src.size[axis];
@@ -308,15 +307,17 @@ public:
         return Ptr<BackendNode>();
     }
 
-    virtual Ptr<BackendNode> initInfEngine(const std::vector<Ptr<BackendWrapper> >&) CV_OVERRIDE
+    virtual Ptr<BackendNode> initInfEngine(const std::vector<Ptr<BackendWrapper> >& inputs) CV_OVERRIDE
     {
 #ifdef HAVE_INF_ENGINE
+        InferenceEngine::DataPtr input = infEngineDataNode(inputs[0]);
+
         InferenceEngine::LayerParams lp;
         lp.name = name;
         lp.type = "SoftMax";
         lp.precision = InferenceEngine::Precision::FP32;
         std::shared_ptr<InferenceEngine::SoftMaxLayer> ieLayer(new InferenceEngine::SoftMaxLayer(lp));
-        ieLayer->axis = axisRaw;
+        ieLayer->axis = clamp(axisRaw, input->dims.size());
         return Ptr<BackendNode>(new InfEngineBackendNode(ieLayer));
 #endif  // HAVE_INF_ENGINE
         return Ptr<BackendNode>();

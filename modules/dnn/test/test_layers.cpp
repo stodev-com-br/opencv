@@ -127,15 +127,9 @@ TEST_P(Test_Caffe_layers, Softmax)
     testLayerUsingCaffeModels("layer_softmax");
 }
 
-TEST_P(Test_Caffe_layers, LRN_spatial)
+TEST_P(Test_Caffe_layers, LRN)
 {
-    if (backend == DNN_BACKEND_INFERENCE_ENGINE && target == DNN_TARGET_MYRIAD)
-        throw SkipTestException("");
     testLayerUsingCaffeModels("layer_lrn_spatial");
-}
-
-TEST_P(Test_Caffe_layers, LRN_channels)
-{
     testLayerUsingCaffeModels("layer_lrn_channels");
 }
 
@@ -291,7 +285,7 @@ TEST_P(Test_Caffe_layers, Fused_Concat)
 
 TEST_P(Test_Caffe_layers, Eltwise)
 {
-    if (backend == DNN_BACKEND_INFERENCE_ENGINE)
+    if (backend == DNN_BACKEND_INFERENCE_ENGINE && target == DNN_TARGET_MYRIAD)
         throw SkipTestException("");
     testLayerUsingCaffeModels("layer_eltwise");
 }
@@ -763,8 +757,7 @@ TEST_P(Test_Caffe_layers, Average_pooling_kernel_area)
 // Test PriorBoxLayer in case of no aspect ratios (just squared proposals).
 TEST_P(Test_Caffe_layers, PriorBox_squares)
 {
-    if (backend == DNN_BACKEND_INFERENCE_ENGINE ||
-        (backend == DNN_BACKEND_OPENCV && (target == DNN_TARGET_OPENCL || target == DNN_TARGET_OPENCL_FP16)))
+    if (backend == DNN_BACKEND_INFERENCE_ENGINE)
         throw SkipTestException("");
     LayerParams lp;
     lp.name = "testPriorBox";
@@ -791,7 +784,8 @@ TEST_P(Test_Caffe_layers, PriorBox_squares)
                                        0.25, 0.0, 1.0, 1.0,
                                        0.1f, 0.1f, 0.2f, 0.2f,
                                        0.1f, 0.1f, 0.2f, 0.2f);
-    normAssert(out.reshape(1, 4), ref);
+    double l1 = (target == DNN_TARGET_OPENCL_FP16 || target == DNN_TARGET_MYRIAD) ? 2e-5 : 1e-5;
+    normAssert(out.reshape(1, 4), ref, "", l1);
 }
 
 typedef TestWithParam<tuple<int, int> > Layer_Test_DWconv_Prelu;
@@ -814,7 +808,7 @@ TEST_P(Layer_Test_DWconv_Prelu, Accuracy)
     const int group = 3;                        //outChannels=group when group>1
     const int num_output = get<1>(GetParam());
     const int kernel_depth = num_input/group;
-    CV_Assert(num_output >= group, num_output % group == 0, num_input % group == 0);
+    CV_Assert_N(num_output >= group, num_output % group == 0, num_input % group == 0);
 
     Net net;
     //layer 1: dwconv
@@ -939,6 +933,25 @@ TEST(Layer_Test_Convolution_DLDT, Accuracy)
     ASSERT_EQ(net.getLayer(outLayers[0])->type, "Concat");
 }
 
+TEST(Layer_Test_Convolution_DLDT, setInput_uint8)
+{
+    Mat inp = blobFromNPY(_tf("blob.npy"));
+
+    Mat inputs[] = {Mat(inp.dims, inp.size, CV_8U), Mat()};
+    randu(inputs[0], 0, 255);
+    inputs[0].convertTo(inputs[1], CV_32F);
+
+    Mat outs[2];
+    for (int i = 0; i < 2; ++i)
+    {
+        Net net = readNet(_tf("layer_convolution.xml"), _tf("layer_convolution.bin"));
+        net.setInput(inputs[i]);
+        outs[i] = net.forward();
+        ASSERT_EQ(outs[i].type(), CV_32F);
+    }
+    normAssert(outs[0], outs[1]);
+}
+
 // 1. Create a .prototxt file with the following network:
 // layer {
 //   type: "Input" name: "data" top: "data"
@@ -961,21 +974,64 @@ TEST(Layer_Test_Convolution_DLDT, Accuracy)
 // net.save('/path/to/caffemodel')
 //
 // 3. Convert using ModelOptimizer.
-TEST(Test_DLDT, two_inputs)
+typedef testing::TestWithParam<tuple<int, int> > Test_DLDT_two_inputs;
+TEST_P(Test_DLDT_two_inputs, as_IR)
 {
+    int firstInpType = get<0>(GetParam());
+    int secondInpType = get<1>(GetParam());
+    // TODO: It looks like a bug in Inference Engine.
+    if (secondInpType == CV_8U)
+        throw SkipTestException("");
+
     Net net = readNet(_tf("net_two_inputs.xml"), _tf("net_two_inputs.bin"));
     int inpSize[] = {1, 2, 3};
-    Mat firstInp(3, &inpSize[0], CV_32F);
-    Mat secondInp(3, &inpSize[0], CV_32F);
-    randu(firstInp, -1, 1);
-    randu(secondInp, -1, 1);
+    Mat firstInp(3, &inpSize[0], firstInpType);
+    Mat secondInp(3, &inpSize[0], secondInpType);
+    randu(firstInp, 0, 255);
+    randu(secondInp, 0, 255);
 
     net.setInput(firstInp, "data");
     net.setInput(secondInp, "second_input");
     Mat out = net.forward();
 
-    normAssert(out, firstInp + secondInp);
+    Mat ref;
+    cv::add(firstInp, secondInp, ref, Mat(), CV_32F);
+    normAssert(out, ref);
 }
+
+TEST_P(Test_DLDT_two_inputs, as_backend)
+{
+    static const float kScale = 0.5f;
+    static const float kScaleInv = 1.0f / kScale;
+
+    Net net;
+    LayerParams lp;
+    lp.type = "Eltwise";
+    lp.name = "testLayer";
+    lp.set("operation", "sum");
+    int eltwiseId = net.addLayerToPrev(lp.name, lp.type, lp);  // connect to a first input
+    net.connect(0, 1, eltwiseId, 1);  // connect to a second input
+
+    int inpSize[] = {1, 2, 3};
+    Mat firstInp(3, &inpSize[0], get<0>(GetParam()));
+    Mat secondInp(3, &inpSize[0], get<1>(GetParam()));
+    randu(firstInp, 0, 255);
+    randu(secondInp, 0, 255);
+
+    net.setInputsNames({"data", "second_input"});
+    net.setInput(firstInp, "data", kScale);
+    net.setInput(secondInp, "second_input", kScaleInv);
+    net.setPreferableBackend(DNN_BACKEND_INFERENCE_ENGINE);
+    Mat out = net.forward();
+
+    Mat ref;
+    addWeighted(firstInp, kScale, secondInp, kScaleInv, 0, ref, CV_32F);
+    normAssert(out, ref);
+}
+
+INSTANTIATE_TEST_CASE_P(/*nothing*/, Test_DLDT_two_inputs, Combine(
+  Values(CV_8U, CV_32F), Values(CV_8U, CV_32F)
+));
 
 class UnsupportedLayer : public Layer
 {
@@ -1143,14 +1199,6 @@ public:
         }
     }
 
-    void forward(InputArrayOfArrays inputs, OutputArrayOfArrays outputs, OutputArrayOfArrays internals) CV_OVERRIDE
-    {
-        CV_TRACE_FUNCTION();
-        CV_TRACE_ARG_VALUE(name, "name", name.c_str());
-
-        Layer::forward_fallback(inputs, outputs, internals);
-    }
-
 private:
     int outWidth, outHeight, zoomFactor;
 };
@@ -1163,7 +1211,7 @@ TEST_P(Test_Caffe_layers, DISABLED_Interp)  // requires patched protobuf (availa
 {
     if (backend == DNN_BACKEND_INFERENCE_ENGINE && target == DNN_TARGET_MYRIAD)
         throw SkipTestException("");
-    // Test a cusom layer.
+    // Test a custom layer.
     CV_DNN_REGISTER_LAYER_CLASS(Interp, CustomInterpLayer);
     try
     {

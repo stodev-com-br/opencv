@@ -15,6 +15,7 @@ from math import sqrt
 from tensorflow.core.framework.node_def_pb2 import NodeDef
 from tensorflow.tools.graph_transforms import TransformGraph
 from google.protobuf import text_format
+from tf_text_graph_common import *
 
 parser = argparse.ArgumentParser(description='Run this script to get a text graph of '
                                              'SSD model from TensorFlow Object Detection API. '
@@ -29,15 +30,16 @@ parser.add_argument('--aspect_ratios', default=[1.0, 2.0, 0.5, 3.0, 0.333], type
                     help='Hyper-parameter of ssd_anchor_generator from config file.')
 parser.add_argument('--image_width', default=300, type=int, help='Training images width.')
 parser.add_argument('--image_height', default=300, type=int, help='Training images height.')
+parser.add_argument('--not_reduce_boxes_in_lowest_layer', default=False, action='store_true',
+                    help='A boolean to indicate whether the fixed 3 boxes per '
+                         'location is used in the lowest achors generation layer.')
+parser.add_argument('--box_predictor', default='convolutional', type=str,
+                    choices=['convolutional', 'weight_shared_convolutional'])
 args = parser.parse_args()
 
 # Nodes that should be kept.
 keepOps = ['Conv2D', 'BiasAdd', 'Add', 'Relu6', 'Placeholder', 'FusedBatchNorm',
            'DepthwiseConv2dNative', 'ConcatV2', 'Mul', 'MaxPool', 'AvgPool', 'Identity']
-
-# Nodes attributes that could be removed because they are not used during import.
-unusedAttrs = ['T', 'data_format', 'Tshape', 'N', 'Tidx', 'Tdim', 'use_cudnn_on_gpu',
-               'Index', 'Tperm', 'is_training', 'Tpaddings']
 
 # Node with which prefixes should be removed
 prefixesToRemove = ('MultipleGridAnchorGenerator/', 'Postprocessor/', 'Preprocessor/')
@@ -60,7 +62,6 @@ def getUnconnectedNodes():
                 unconnected.remove(inp)
     return unconnected
 
-removedNodes = []
 
 # Detect unfused batch normalization nodes and fuse them.
 def fuse_batch_normalization():
@@ -112,41 +113,13 @@ def fuse_batch_normalization():
 
 fuse_batch_normalization()
 
-# Removes Identity nodes
-def removeIdentity():
-    identities = {}
-    for node in graph_def.node:
-        if node.op == 'Identity':
-            identities[node.name] = node.input[0]
-            graph_def.node.remove(node)
+removeIdentity(graph_def)
 
-    for node in graph_def.node:
-        for i in range(len(node.input)):
-            if node.input[i] in identities:
-                node.input[i] = identities[node.input[i]]
+def to_remove(name, op):
+    return (not op in keepOps) or name.startswith(prefixesToRemove)
 
-removeIdentity()
+removeUnusedNodesAndAttrs(to_remove, graph_def)
 
-# Remove extra nodes and attributes.
-for i in reversed(range(len(graph_def.node))):
-    op = graph_def.node[i].op
-    name = graph_def.node[i].name
-
-    if (not op in keepOps) or name.startswith(prefixesToRemove):
-        if op != 'Const':
-            removedNodes.append(name)
-
-        del graph_def.node[i]
-    else:
-        for attr in unusedAttrs:
-            if attr in graph_def.node[i].attr:
-                del graph_def.node[i].attr[attr]
-
-# Remove references to removed nodes except Const nodes.
-for node in graph_def.node:
-    for i in reversed(range(len(node.input))):
-        if node.input[i] in removedNodes:
-            del node.input[i]
 
 # Connect input node to the first layer
 assert(graph_def.node[0].op == 'Placeholder')
@@ -160,28 +133,6 @@ graph_def.node[1].input.append(weights)
 # Create SSD postprocessing head ###############################################
 
 # Concatenate predictions of classes, predictions of bounding boxes and proposals.
-def tensorMsg(values):
-    if all([isinstance(v, float) for v in values]):
-        dtype = 'DT_FLOAT'
-        field = 'float_val'
-    elif all([isinstance(v, int) for v in values]):
-        dtype = 'DT_INT32'
-        field = 'int_val'
-    else:
-        raise Exception('Wrong values types')
-
-    msg = 'tensor { dtype: ' + dtype + ' tensor_shape { dim { size: %d } }' % len(values)
-    for value in values:
-        msg += '%s: %s ' % (field, str(value))
-    return msg + '}'
-
-def addConstNode(name, values):
-    node = NodeDef()
-    node.name = name
-    node.op = 'Const'
-    text_format.Merge(tensorMsg(values), node.attr["value"])
-    graph_def.node.extend([node])
-
 def addConcatNode(name, inputs, axisNodeName):
     concat = NodeDef()
     concat.name = name
@@ -191,15 +142,21 @@ def addConcatNode(name, inputs, axisNodeName):
     concat.input.append(axisNodeName)
     graph_def.node.extend([concat])
 
-addConstNode('concat/axis_flatten', [-1])
-addConstNode('PriorBox/concat/axis', [-2])
+addConstNode('concat/axis_flatten', [-1], graph_def)
+addConstNode('PriorBox/concat/axis', [-2], graph_def)
 
-for label in ['ClassPredictor', 'BoxEncodingPredictor']:
+for label in ['ClassPredictor', 'BoxEncodingPredictor' if args.box_predictor is 'convolutional' else 'BoxPredictor']:
     concatInputs = []
     for i in range(args.num_layers):
         # Flatten predictions
         flatten = NodeDef()
-        inpName = 'BoxPredictor_%d/%s/BiasAdd' % (i, label)
+        if args.box_predictor is 'convolutional':
+            inpName = 'BoxPredictor_%d/%s/BiasAdd' % (i, label)
+        else:
+            if i == 0:
+                inpName = 'WeightSharedConvolutionalBoxPredictor/%s/BiasAdd' % label
+            else:
+                inpName = 'WeightSharedConvolutionalBoxPredictor_%d/%s/BiasAdd' % (i, label)
         flatten.input.append(inpName)
         flatten.name = inpName + '/Flatten'
         flatten.op = 'Flatten'
@@ -208,23 +165,37 @@ for label in ['ClassPredictor', 'BoxEncodingPredictor']:
         graph_def.node.extend([flatten])
     addConcatNode('%s/concat' % label, concatInputs, 'concat/axis_flatten')
 
+idx = 0
+for node in graph_def.node:
+    if node.name == ('BoxPredictor_%d/BoxEncodingPredictor/Conv2D' % idx) or \
+       node.name == ('WeightSharedConvolutionalBoxPredictor_%d/BoxPredictor/Conv2D' % idx) or \
+       node.name == 'WeightSharedConvolutionalBoxPredictor/BoxPredictor/Conv2D':
+        text_format.Merge('b: true', node.attr["loc_pred_transposed"])
+        idx += 1
+assert(idx == args.num_layers)
+
 # Add layers that generate anchors (bounding boxes proposals).
 scales = [args.min_scale + (args.max_scale - args.min_scale) * i / (args.num_layers - 1)
           for i in range(args.num_layers)] + [1.0]
 
 priorBoxes = []
-addConstNode('reshape_prior_boxes_to_4d', [1, 2, -1, 1])
 for i in range(args.num_layers):
     priorBox = NodeDef()
     priorBox.name = 'PriorBox_%d' % i
     priorBox.op = 'PriorBox'
-    priorBox.input.append('BoxPredictor_%d/BoxEncodingPredictor/BiasAdd' % i)
+    if args.box_predictor is 'convolutional':
+        priorBox.input.append('BoxPredictor_%d/BoxEncodingPredictor/BiasAdd' % i)
+    else:
+        if i == 0:
+            priorBox.input.append('WeightSharedConvolutionalBoxPredictor/BoxPredictor/Conv2D')
+        else:
+            priorBox.input.append('WeightSharedConvolutionalBoxPredictor_%d/BoxPredictor/BiasAdd' % i)
     priorBox.input.append(graph_def.node[0].name)  # image_tensor
 
     text_format.Merge('b: false', priorBox.attr["flip"])
     text_format.Merge('b: false', priorBox.attr["clip"])
 
-    if i == 0:
+    if i == 0 and not args.not_reduce_boxes_in_lowest_layer:
         widths = [0.1, args.min_scale * sqrt(2.0), args.min_scale * sqrt(0.5)]
         heights = [0.1, args.min_scale / sqrt(2.0), args.min_scale / sqrt(0.5)]
     else:
@@ -240,18 +211,9 @@ for i in range(args.num_layers):
     text_format.Merge(tensorMsg([0.1, 0.1, 0.2, 0.2]), priorBox.attr["variance"])
 
     graph_def.node.extend([priorBox])
+    priorBoxes.append(priorBox.name)
 
-    # Reshape from 1x2xN to 1x2xNx1
-    reshape = NodeDef()
-    reshape.name = priorBox.name + '/4d'
-    reshape.op = 'Reshape'
-    reshape.input.append(priorBox.name)
-    reshape.input.append('reshape_prior_boxes_to_4d')
-    graph_def.node.extend([reshape])
-
-    priorBoxes.append(reshape.name)
-
-addConcatNode('PriorBox/concat', priorBoxes, 'PriorBox/concat/axis')
+addConcatNode('PriorBox/concat', priorBoxes, 'concat/axis_flatten')
 
 # Sigmoid for classes predictions and DetectionOutput layer
 sigmoid = NodeDef()
@@ -264,7 +226,10 @@ detectionOut = NodeDef()
 detectionOut.name = 'detection_out'
 detectionOut.op = 'DetectionOutput'
 
-detectionOut.input.append('BoxEncodingPredictor/concat')
+if args.box_predictor == 'convolutional':
+    detectionOut.input.append('BoxEncodingPredictor/concat')
+else:
+    detectionOut.input.append('BoxPredictor/concat')
 detectionOut.input.append(sigmoid.name)
 detectionOut.input.append('PriorBox/concat')
 
@@ -276,7 +241,6 @@ text_format.Merge('i: 100', detectionOut.attr['top_k'])
 text_format.Merge('s: "CENTER_SIZE"', detectionOut.attr['code_type'])
 text_format.Merge('i: 100', detectionOut.attr['keep_top_k'])
 text_format.Merge('f: 0.01', detectionOut.attr['confidence_threshold'])
-text_format.Merge('b: true', detectionOut.attr['loc_pred_transposed'])
 
 graph_def.node.extend([detectionOut])
 

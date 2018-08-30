@@ -81,6 +81,7 @@ public:
 
     virtual bool supportBackend(int backendId) CV_OVERRIDE
     {
+#ifdef HAVE_INF_ENGINE
         if (backendId == DNN_BACKEND_INFERENCE_ENGINE)
         {
             if (type == "Convolution")
@@ -91,13 +92,19 @@ public:
                 const int outGroupCn = blobs[0].size[1];  // Weights are in IOHW layout
                 const int group = numOutput / outGroupCn;
                 if (group != 1)
+                {
+#if INF_ENGINE_VER_MAJOR_GE(INF_ENGINE_RELEASE_2018R3)
+                    return preferableTarget == DNN_TARGET_CPU;
+#endif
                     return false;
+                }
                 if (preferableTarget == DNN_TARGET_OPENCL || preferableTarget == DNN_TARGET_OPENCL_FP16)
                     return dilation.width == 1 && dilation.height == 1;
                 return true;
             }
         }
         else
+#endif  // HAVE_INF_ENGINE
             return backendId == DNN_BACKEND_OPENCV || backendId == DNN_BACKEND_HALIDE;
     }
 
@@ -296,6 +303,9 @@ public:
 
     bool setActivation(const Ptr<ActivationLayer>& layer) CV_OVERRIDE
     {
+        if (!activ.empty() && !layer.empty())
+            return false;
+
         activ = layer;
         if (activ.empty())
             reluslope.clear();
@@ -346,8 +356,8 @@ public:
         // (conv(I) + b1 ) * w + b2
         // means to replace convolution's weights to [w*conv(I)] and bias to [b1 * w + b2]
         const int outCn = weightsMat.size[0];
-        CV_Assert(!weightsMat.empty(), biasvec.size() == outCn + 2,
-                  w.empty() || outCn == w.total(), b.empty() || outCn == b.total());
+        CV_Assert_N(!weightsMat.empty(), biasvec.size() == outCn + 2,
+                    w.empty() || outCn == w.total(), b.empty() || outCn == b.total());
 
         if (!w.empty())
         {
@@ -509,13 +519,14 @@ public:
                          Size kernel, Size pad, Size stride, Size dilation,
                          const ActivationLayer* activ, int ngroups, int nstripes )
         {
-            CV_Assert( input.dims == 4 && output.dims == 4,
+            CV_Assert_N(
+                       input.dims == 4 && output.dims == 4,
                        input.size[0] == output.size[0],
                        weights.rows == output.size[1],
                        weights.cols == (input.size[1]/ngroups)*kernel.width*kernel.height,
                        input.type() == output.type(),
                        input.type() == weights.type(),
-                       input.type() == CV_32F,
+                       input.type() == CV_32FC1,
                        input.isContinuous(),
                        output.isContinuous(),
                        biasvec.size() == (size_t)output.size[1]+2);
@@ -560,7 +571,7 @@ public:
             int ngroups = ngroups_, batchSize = input_->size[0]*ngroups;
             int outW = output_->size[3], outH = output_->size[2], outCn = output_->size[1]/ngroups;
             int width = input_->size[3], height = input_->size[2], inpCn = input_->size[1]/ngroups;
-            int nstripes = nstripes_;
+            const int nstripes = nstripes_;
             int kernel_w = kernel_.width, kernel_h = kernel_.height;
             int pad_w = pad_.width, pad_h = pad_.height;
             int stride_w = stride_.width, stride_h = stride_.height;
@@ -587,7 +598,6 @@ public:
                 int samplesPerStripe = std::max((batchSize + nstripes - 1)/nstripes, 1);
                 r.start *= samplesPerStripe;
                 r.end *= samplesPerStripe;
-                nstripes *= samplesPerStripe;
                 stripeSize = outPlaneSize;
             }
 
@@ -866,6 +876,16 @@ public:
         for (int i = 0; i < inputs.size(); ++i)
             CV_Assert(inputs[i].u != outputs[0].u);
 
+        if (umat_blobs.empty())
+        {
+            size_t n = blobs.size();
+            umat_blobs.resize(n);
+            for (size_t i = 0; i < n; i++)
+            {
+                blobs[i].copyTo(umat_blobs[i]);
+            }
+        }
+
         if (convolutionOp.empty())
         {
             OCL4DNNConvConfig config;
@@ -997,8 +1017,8 @@ public:
                name.c_str(), inputs[0]->size[0], inputs[0]->size[1], inputs[0]->size[2], inputs[0]->size[3],
                kernel.width, kernel.height, pad.width, pad.height,
                stride.width, stride.height, dilation.width, dilation.height);*/
-        CV_Assert(inputs.size() == (size_t)1, inputs[0]->size[1] % blobs[0].size[1] == 0,
-                  outputs.size() == 1, inputs[0]->data != outputs[0].data);
+        CV_Assert_N(inputs.size() == (size_t)1, inputs[0]->size[1] % blobs[0].size[1] == 0,
+                    outputs.size() == 1, inputs[0]->data != outputs[0].data);
 
         int ngroups = inputs[0]->size[1]/blobs[0].size[1];
         CV_Assert(outputs[0].size[1] % ngroups == 0);
@@ -1637,14 +1657,6 @@ public:
 Ptr<BaseConvolutionLayer> ConvolutionLayer::create(const LayerParams &params)
 {
     Ptr<ConvolutionLayerImpl> l(new ConvolutionLayerImpl(params));
-
-#ifdef HAVE_OPENCL
-    size_t n = params.blobs.size();
-    l->umat_blobs.resize(n);
-    for (int i = 0; i < n; i++)
-        l->umat_blobs[i] = params.blobs[i].getUMat(ACCESS_READ);
-#endif
-
     return l;
 }
 

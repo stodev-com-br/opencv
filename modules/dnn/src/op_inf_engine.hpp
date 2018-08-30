@@ -8,6 +8,10 @@
 #ifndef __OPENCV_DNN_OP_INF_ENGINE_HPP__
 #define __OPENCV_DNN_OP_INF_ENGINE_HPP__
 
+#include "opencv2/core/cvdef.h"
+#include "opencv2/core/cvstd.hpp"
+#include "opencv2/dnn.hpp"
+
 #ifdef HAVE_INF_ENGINE
 #if defined(__GNUC__) && __GNUC__ >= 5
 //#pragma GCC diagnostic push
@@ -17,6 +21,19 @@
 #if defined(__GNUC__) && __GNUC__ >= 5
 //#pragma GCC diagnostic pop
 #endif
+
+#define INF_ENGINE_RELEASE_2018R1 2018010000
+#define INF_ENGINE_RELEASE_2018R2 2018020000
+#define INF_ENGINE_RELEASE_2018R3 2018030000
+
+#ifndef INF_ENGINE_RELEASE
+#warning("IE version have not been provided via command-line. Using 2018R2 by default")
+#define INF_ENGINE_RELEASE INF_ENGINE_RELEASE_2018R2
+#endif
+
+#define INF_ENGINE_VER_MAJOR_GT(ver) (((INF_ENGINE_RELEASE) / 10000) > ((ver) / 10000))
+#define INF_ENGINE_VER_MAJOR_GE(ver) (((INF_ENGINE_RELEASE) / 10000) >= ((ver) / 10000))
+
 #endif  // HAVE_INF_ENGINE
 
 namespace cv { namespace dnn {
@@ -34,7 +51,9 @@ public:
 
     void setPrecision(InferenceEngine::Precision p) noexcept;
 
-    virtual InferenceEngine::Precision getPrecision() noexcept CV_OVERRIDE;
+    virtual InferenceEngine::Precision getPrecision() noexcept;
+
+    virtual InferenceEngine::Precision getPrecision() const noexcept;
 
     virtual void getOutputsInfo(InferenceEngine::OutputsDataMap &out) noexcept /*CV_OVERRIDE*/;
 
@@ -44,13 +63,19 @@ public:
 
     virtual void getInputsInfo(InferenceEngine::InputsDataMap &inputs) const noexcept /*CV_OVERRIDE*/;
 
-    virtual InferenceEngine::InputInfo::Ptr getInput(const std::string &inputName) noexcept CV_OVERRIDE;
+    virtual InferenceEngine::InputInfo::Ptr getInput(const std::string &inputName) noexcept;
+
+    virtual InferenceEngine::InputInfo::Ptr getInput(const std::string &inputName) const noexcept;
 
     virtual void getName(char *pName, size_t len) noexcept;
 
     virtual void getName(char *pName, size_t len) const noexcept;
 
-    virtual size_t layerCount() noexcept CV_OVERRIDE;
+    virtual const std::string& getName() const noexcept;
+
+    virtual size_t layerCount() noexcept;
+
+    virtual size_t layerCount() const noexcept;
 
     virtual InferenceEngine::DataPtr& getData(const char *dname) noexcept CV_OVERRIDE;
 
@@ -58,19 +83,32 @@ public:
 
     virtual InferenceEngine::StatusCode addOutput(const std::string &layerName,
                                                   size_t outputIndex = 0,
-                                                  InferenceEngine::ResponseDesc *resp = nullptr) noexcept CV_OVERRIDE;
+                                                  InferenceEngine::ResponseDesc *resp = nullptr) noexcept;
 
     virtual InferenceEngine::StatusCode getLayerByName(const char *layerName,
                                                        InferenceEngine::CNNLayerPtr &out,
-                                                       InferenceEngine::ResponseDesc *resp) noexcept CV_OVERRIDE;
+                                                       InferenceEngine::ResponseDesc *resp) noexcept;
+
+    virtual InferenceEngine::StatusCode getLayerByName(const char *layerName,
+                                                       InferenceEngine::CNNLayerPtr &out,
+                                                       InferenceEngine::ResponseDesc *resp) const noexcept;
 
     virtual void setTargetDevice(InferenceEngine::TargetDevice device) noexcept CV_OVERRIDE;
 
-    virtual InferenceEngine::TargetDevice getTargetDevice() noexcept CV_OVERRIDE;
+    virtual InferenceEngine::TargetDevice getTargetDevice() noexcept;
+
+    virtual InferenceEngine::TargetDevice getTargetDevice() const noexcept;
 
     virtual InferenceEngine::StatusCode setBatchSize(const size_t size) noexcept CV_OVERRIDE;
 
+    virtual InferenceEngine::StatusCode setBatchSize(size_t size, InferenceEngine::ResponseDesc* responseDesc) noexcept;
+
     virtual size_t getBatchSize() const noexcept CV_OVERRIDE;
+
+#if INF_ENGINE_VER_MAJOR_GT(INF_ENGINE_RELEASE_2018R2)
+    virtual InferenceEngine::StatusCode AddExtension(const InferenceEngine::IShapeInferExtensionPtr& extension, InferenceEngine::ResponseDesc* resp) noexcept;
+    virtual InferenceEngine::StatusCode reshape(const InputShapes& inputShapes, InferenceEngine::ResponseDesc* resp) noexcept;
+#endif
 
     void init(int targetId);
 
@@ -94,6 +132,8 @@ private:
     InferenceEngine::ExecutableNetwork netExec;
     InferenceEngine::InferRequest infRequest;
 
+    std::string name;
+
     void initPlugin(InferenceEngine::ICNNNetwork& net);
 };
 
@@ -115,19 +155,23 @@ class InfEngineBackendWrapper : public BackendWrapper
 public:
     InfEngineBackendWrapper(int targetId, const Mat& m);
 
+    InfEngineBackendWrapper(Ptr<BackendWrapper> wrapper);
+
     ~InfEngineBackendWrapper();
+
+    static Ptr<BackendWrapper> create(Ptr<BackendWrapper> wrapper);
 
     virtual void copyToHost() CV_OVERRIDE;
 
     virtual void setHostDirty() CV_OVERRIDE;
 
     InferenceEngine::DataPtr dataPtr;
-    InferenceEngine::TBlob<float>::Ptr blob;
+    InferenceEngine::Blob::Ptr blob;
 };
 
-InferenceEngine::TBlob<float>::Ptr wrapToInfEngineBlob(const Mat& m, InferenceEngine::Layout layout = InferenceEngine::Layout::ANY);
+InferenceEngine::Blob::Ptr wrapToInfEngineBlob(const Mat& m, InferenceEngine::Layout layout = InferenceEngine::Layout::ANY);
 
-InferenceEngine::TBlob<float>::Ptr wrapToInfEngineBlob(const Mat& m, const std::vector<size_t>& shape, InferenceEngine::Layout layout);
+InferenceEngine::Blob::Ptr wrapToInfEngineBlob(const Mat& m, const std::vector<size_t>& shape, InferenceEngine::Layout layout);
 
 InferenceEngine::DataPtr infEngineDataNode(const Ptr<BackendWrapper>& ptr);
 

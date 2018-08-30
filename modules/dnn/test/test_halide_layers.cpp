@@ -16,7 +16,7 @@ using namespace cv;
 using namespace cv::dnn;
 using namespace testing;
 
-static void test(Mat& input, Net& net, int backendId, int targetId)
+static void test(Mat& input, Net& net, Backend backendId, Target targetId, bool skipCheck = false)
 {
     DNNTestLayer::checkBackend(backendId, targetId);
     randu(input, -1.0f, 1.0f);
@@ -29,33 +29,36 @@ static void test(Mat& input, Net& net, int backendId, int targetId)
     net.setPreferableTarget(targetId);
     Mat outputHalide = net.forward().clone();
 
+    if (skipCheck)
+        return;
+
     double l1, lInf;
     DNNTestLayer::getDefaultThresholds(backendId, targetId, &l1, &lInf);
     normAssert(outputDefault, outputHalide, "", l1, lInf);
 }
 
-static void test(LayerParams& params, Mat& input, int backendId, int targetId)
+static void test(LayerParams& params, Mat& input, Backend backendId, Target targetId, bool skipCheck = false)
 {
     Net net;
     net.addLayerToPrev(params.name, params.type, params);
-    test(input, net, backendId, targetId);
+    test(input, net, backendId, targetId, skipCheck);
 }
 
-static testing::internal::ParamGenerator<tuple<DNNBackend, DNNTarget> > dnnBackendsAndTargetsWithHalide()
+static testing::internal::ParamGenerator<tuple<Backend, Target> > dnnBackendsAndTargetsWithHalide()
 {
-    static const tuple<DNNBackend, DNNTarget> testCases[] = {
+    static const tuple<Backend, Target> testCases[] = {
 #ifdef HAVE_HALIDE
-        tuple<DNNBackend, DNNTarget>(DNN_BACKEND_HALIDE, DNN_TARGET_CPU),
-        tuple<DNNBackend, DNNTarget>(DNN_BACKEND_HALIDE, DNN_TARGET_OPENCL),
+        tuple<Backend, Target>(DNN_BACKEND_HALIDE, DNN_TARGET_CPU),
+        tuple<Backend, Target>(DNN_BACKEND_HALIDE, DNN_TARGET_OPENCL),
 #endif
 #ifdef HAVE_INF_ENGINE
-        tuple<DNNBackend, DNNTarget>(DNN_BACKEND_INFERENCE_ENGINE, DNN_TARGET_CPU),
-        tuple<DNNBackend, DNNTarget>(DNN_BACKEND_INFERENCE_ENGINE, DNN_TARGET_OPENCL),
-        tuple<DNNBackend, DNNTarget>(DNN_BACKEND_INFERENCE_ENGINE, DNN_TARGET_OPENCL_FP16),
-        tuple<DNNBackend, DNNTarget>(DNN_BACKEND_INFERENCE_ENGINE, DNN_TARGET_MYRIAD),
+        tuple<Backend, Target>(DNN_BACKEND_INFERENCE_ENGINE, DNN_TARGET_CPU),
+        tuple<Backend, Target>(DNN_BACKEND_INFERENCE_ENGINE, DNN_TARGET_OPENCL),
+        tuple<Backend, Target>(DNN_BACKEND_INFERENCE_ENGINE, DNN_TARGET_OPENCL_FP16),
+        tuple<Backend, Target>(DNN_BACKEND_INFERENCE_ENGINE, DNN_TARGET_MYRIAD),
 #endif
-        tuple<DNNBackend, DNNTarget>(DNN_BACKEND_OPENCV, DNN_TARGET_OPENCL),
-        tuple<DNNBackend, DNNTarget>(DNN_BACKEND_OPENCV, DNN_TARGET_OPENCL_FP16)
+        tuple<Backend, Target>(DNN_BACKEND_OPENCV, DNN_TARGET_OPENCL),
+        tuple<Backend, Target>(DNN_BACKEND_OPENCV, DNN_TARGET_OPENCL_FP16)
     };
     return testing::ValuesIn(testCases);
 }
@@ -89,7 +92,7 @@ TEST_P(Test_Halide_layers, Padding)
 ////////////////////////////////////////////////////////////////////////////////
 // Convolution
 ////////////////////////////////////////////////////////////////////////////////
-typedef TestWithParam<tuple<Vec3i, Size, Size, Size, Size, Size, bool, tuple<DNNBackend, DNNTarget> > > Convolution;
+typedef TestWithParam<tuple<Vec3i, Size, Size, Size, Size, Size, bool, tuple<Backend, Target> > > Convolution;
 TEST_P(Convolution, Accuracy)
 {
     int inChannels = get<0>(GetParam())[0];
@@ -101,12 +104,21 @@ TEST_P(Convolution, Accuracy)
     Size pad = get<4>(GetParam());
     Size dilation = get<5>(GetParam());
     bool hasBias = get<6>(GetParam());
-    int backendId = get<0>(get<7>(GetParam()));
-    int targetId = get<1>(get<7>(GetParam()));
+    Backend backendId = get<0>(get<7>(GetParam()));
+    Target targetId = get<1>(get<7>(GetParam()));
 
-    if ((backendId == DNN_BACKEND_INFERENCE_ENGINE && targetId == DNN_TARGET_MYRIAD) ||
-        (backendId == DNN_BACKEND_OPENCV && targetId == DNN_TARGET_OPENCL_FP16))
+    if (backendId == DNN_BACKEND_INFERENCE_ENGINE && targetId == DNN_TARGET_MYRIAD)
         throw SkipTestException("");
+
+    bool skipCheck = false;
+    if (cvtest::skipUnstableTests && backendId == DNN_BACKEND_OPENCV &&
+        (targetId == DNN_TARGET_OPENCL || targetId == DNN_TARGET_OPENCL_FP16) &&
+        (
+            (kernel == Size(3, 1) && stride == Size(1, 1) && pad == Size(0, 1)) ||
+            (stride.area() > 1 && !(pad.width == 0 && pad.height == 0))
+        )
+    )
+        skipCheck = true;
 
     int sz[] = {outChannels, inChannels / group, kernel.height, kernel.width};
     Mat weights(4, &sz[0], CV_32F);
@@ -135,7 +147,9 @@ TEST_P(Convolution, Accuracy)
     }
     int inpSz[] = {1, inChannels, inSize.height, inSize.width};
     Mat input(4, &inpSz[0], CV_32F);
-    test(lp, input, backendId, targetId);
+    test(lp, input, backendId, targetId, skipCheck);
+    if (skipCheck)
+        throw SkipTestException("Skip checks in unstable test");
 }
 
 INSTANTIATE_TEST_CASE_P(Layer_Test_Halide, Convolution, Combine(
@@ -154,7 +168,7 @@ INSTANTIATE_TEST_CASE_P(Layer_Test_Halide, Convolution, Combine(
 ////////////////////////////////////////////////////////////////////////////////
 // Deconvolution
 ////////////////////////////////////////////////////////////////////////////////
-typedef TestWithParam<tuple<Vec3i, Size, Size, Size, Size, Vec4i, bool, tuple<DNNBackend, DNNTarget> > > Deconvolution;
+typedef TestWithParam<tuple<Vec3i, Size, Size, Size, Size, Vec4i, bool, tuple<Backend, Target> > > Deconvolution;
 TEST_P(Deconvolution, Accuracy)
 {
     int inChannels = get<0>(GetParam())[0];
@@ -167,8 +181,8 @@ TEST_P(Deconvolution, Accuracy)
     Size stride = Size(get<5>(GetParam())[0], get<5>(GetParam())[1]);
     Size adjPad = Size(get<5>(GetParam())[2], get<5>(GetParam())[3]);
     bool hasBias = get<6>(GetParam());
-    int backendId = get<0>(get<7>(GetParam()));
-    int targetId = get<1>(get<7>(GetParam()));
+    Backend backendId = get<0>(get<7>(GetParam()));
+    Target targetId = get<1>(get<7>(GetParam()));
     if (backendId == DNN_BACKEND_INFERENCE_ENGINE && targetId == DNN_TARGET_CPU &&
         dilation.width == 2 && dilation.height == 2)
         throw SkipTestException("");
@@ -220,7 +234,7 @@ INSTANTIATE_TEST_CASE_P(Layer_Test_Halide, Deconvolution, Combine(
 ////////////////////////////////////////////////////////////////////////////////
 // LRN
 ////////////////////////////////////////////////////////////////////////////////
-typedef TestWithParam<tuple<Vec3i, int, Vec3f, bool, std::string, tuple<DNNBackend, DNNTarget> > > LRN;
+typedef TestWithParam<tuple<Vec3i, int, Vec3f, bool, std::string, tuple<Backend, Target> > > LRN;
 TEST_P(LRN, Accuracy)
 {
     int inChannels = get<0>(GetParam())[0];
@@ -231,8 +245,8 @@ TEST_P(LRN, Accuracy)
     float bias = get<2>(GetParam())[2];
     bool normBySize = get<3>(GetParam());
     std::string nrmType = get<4>(GetParam());
-    int backendId = get<0>(get<5>(GetParam()));
-    int targetId = get<1>(get<5>(GetParam()));
+    Backend backendId = get<0>(get<5>(GetParam()));
+    Target targetId = get<1>(get<5>(GetParam()));
     if (backendId == DNN_BACKEND_INFERENCE_ENGINE)
         throw SkipTestException("");
 
@@ -265,15 +279,15 @@ INSTANTIATE_TEST_CASE_P(Layer_Test_Halide, LRN, Combine(
 ////////////////////////////////////////////////////////////////////////////////
 // Average pooling
 ////////////////////////////////////////////////////////////////////////////////
-typedef TestWithParam<tuple<int, Size, Size, Size, tuple<DNNBackend, DNNTarget> > > AvePooling;
+typedef TestWithParam<tuple<int, Size, Size, Size, tuple<Backend, Target> > > AvePooling;
 TEST_P(AvePooling, Accuracy)
 {
     int inChannels = get<0>(GetParam());
     Size outSize = get<1>(GetParam());;  // Input size will be computed from parameters.
     Size kernel = get<2>(GetParam());
     Size stride = get<3>(GetParam());
-    int backendId = get<0>(get<4>(GetParam()));
-    int targetId = get<1>(get<4>(GetParam()));
+    Backend backendId = get<0>(get<4>(GetParam()));
+    Target targetId = get<1>(get<4>(GetParam()));
     if (backendId == DNN_BACKEND_INFERENCE_ENGINE && targetId == DNN_TARGET_MYRIAD)
         throw SkipTestException("");
 
@@ -305,7 +319,7 @@ INSTANTIATE_TEST_CASE_P(Layer_Test_Halide, AvePooling, Combine(
 ////////////////////////////////////////////////////////////////////////////////
 // Maximum pooling
 ////////////////////////////////////////////////////////////////////////////////
-typedef TestWithParam<tuple<int, Size, Size, Size, Size, tuple<DNNBackend, DNNTarget> > > MaxPooling;
+typedef TestWithParam<tuple<int, Size, Size, Size, Size, tuple<Backend, Target> > > MaxPooling;
 TEST_P(MaxPooling, Accuracy)
 {
     int inChannels = get<0>(GetParam());
@@ -313,8 +327,8 @@ TEST_P(MaxPooling, Accuracy)
     Size kernel = get<2>(GetParam());
     Size stride = get<3>(GetParam());
     Size pad = get<4>(GetParam());
-    int backendId = get<0>(get<5>(GetParam()));
-    int targetId = get<1>(get<5>(GetParam()));
+    Backend backendId = get<0>(get<5>(GetParam()));
+    Target targetId = get<1>(get<5>(GetParam()));
 
     LayerParams lp;
     lp.set("pool", "max");
@@ -344,17 +358,16 @@ INSTANTIATE_TEST_CASE_P(Layer_Test_Halide, MaxPooling, Combine(
 ////////////////////////////////////////////////////////////////////////////////
 // Fully-connected
 ////////////////////////////////////////////////////////////////////////////////
-typedef TestWithParam<tuple<int, Size, int, bool, tuple<DNNBackend, DNNTarget> > > FullyConnected;
+typedef TestWithParam<tuple<int, Size, int, bool, tuple<Backend, Target> > > FullyConnected;
 TEST_P(FullyConnected, Accuracy)
 {
     int inChannels = get<0>(GetParam());
     Size inSize = get<1>(GetParam());
     int outChannels = get<2>(GetParam());
     bool hasBias = get<3>(GetParam());
-    int backendId = get<0>(get<4>(GetParam()));
-    int targetId = get<1>(get<4>(GetParam()));
-    if (backendId == DNN_BACKEND_INFERENCE_ENGINE ||
-        (backendId == DNN_BACKEND_OPENCV && targetId == DNN_TARGET_OPENCL_FP16))
+    Backend backendId = get<0>(get<4>(GetParam()));
+    Target targetId = get<1>(get<4>(GetParam()));
+    if (backendId == DNN_BACKEND_INFERENCE_ENGINE)
         throw SkipTestException("");
 
     Mat weights(outChannels, inChannels * inSize.height * inSize.width, CV_32F);
@@ -387,12 +400,12 @@ INSTANTIATE_TEST_CASE_P(Layer_Test_Halide, FullyConnected, Combine(
 ////////////////////////////////////////////////////////////////////////////////
 // SoftMax
 ////////////////////////////////////////////////////////////////////////////////
-typedef TestWithParam<tuple<int,  tuple<DNNBackend, DNNTarget> > > SoftMax;
+typedef TestWithParam<tuple<int,  tuple<Backend, Target> > > SoftMax;
 TEST_P(SoftMax, Accuracy)
 {
     int inChannels = get<0>(GetParam());
-    int backendId = get<0>(get<1>(GetParam()));
-    int targetId = get<1>(get<1>(GetParam()));
+    Backend backendId = get<0>(get<1>(GetParam()));
+    Target targetId = get<1>(get<1>(GetParam()));
     LayerParams lp;
     lp.type = "SoftMax";
     lp.name = "testLayer";
@@ -454,7 +467,7 @@ TEST_P(Test_Halide_layers, MaxPoolUnpool)
 ////////////////////////////////////////////////////////////////////////////////
 static const int kNumChannels = 3;
 
-void testInPlaceActivation(LayerParams& lp, int backendId, int targetId)
+void testInPlaceActivation(LayerParams& lp, Backend backendId, Target targetId)
 {
     EXPECT_FALSE(lp.name.empty());
 
@@ -476,14 +489,14 @@ void testInPlaceActivation(LayerParams& lp, int backendId, int targetId)
     test(input, net, backendId, targetId);
 }
 
-typedef TestWithParam<tuple<bool, bool, float, tuple<DNNBackend, DNNTarget> > > BatchNorm;
+typedef TestWithParam<tuple<bool, bool, float, tuple<Backend, Target> > > BatchNorm;
 TEST_P(BatchNorm, Accuracy)
 {
     bool hasWeights = get<0>(GetParam());
     bool hasBias = get<1>(GetParam());
     float epsilon = get<2>(GetParam());
-    int backendId = get<0>(get<3>(GetParam()));
-    int targetId = get<1>(get<3>(GetParam()));
+    Backend backendId = get<0>(get<3>(GetParam()));
+    Target targetId = get<1>(get<3>(GetParam()));
 
     LayerParams lp;
     lp.set("has_weight", hasWeights);
@@ -511,12 +524,12 @@ INSTANTIATE_TEST_CASE_P(Layer_Test_Halide, BatchNorm, Combine(
                 dnnBackendsAndTargetsWithHalide()
 ));
 
-typedef TestWithParam<tuple<float, tuple<DNNBackend, DNNTarget> > > ReLU;
+typedef TestWithParam<tuple<float, tuple<Backend, Target> > > ReLU;
 TEST_P(ReLU, Accuracy)
 {
     float negativeSlope = get<0>(GetParam());
-    int backendId = get<0>(get<1>(GetParam()));
-    int targetId = get<1>(get<1>(GetParam()));
+    Backend backendId = get<0>(get<1>(GetParam()));
+    Target targetId = get<1>(get<1>(GetParam()));
 
     LayerParams lp;
     lp.set("negative_slope", negativeSlope);
@@ -530,11 +543,11 @@ INSTANTIATE_TEST_CASE_P(Layer_Test_Halide, ReLU, Combine(
                    dnnBackendsAndTargetsWithHalide()
 ));
 
-typedef TestWithParam<tuple<std::string, tuple<DNNBackend, DNNTarget> > > NoParamActivation;
+typedef TestWithParam<tuple<std::string, tuple<Backend, Target> > > NoParamActivation;
 TEST_P(NoParamActivation, Accuracy)
 {
-    int backendId = get<0>(get<1>(GetParam()));
-    int targetId = get<1>(get<1>(GetParam()));
+    Backend backendId = get<0>(get<1>(GetParam()));
+    Target targetId = get<1>(get<1>(GetParam()));
 
     LayerParams lp;
     lp.type = get<0>(GetParam());
@@ -546,14 +559,14 @@ INSTANTIATE_TEST_CASE_P(Layer_Test_Halide, NoParamActivation, Combine(
          dnnBackendsAndTargetsWithHalide()
 ));
 
-typedef TestWithParam<tuple<Vec3f, tuple<DNNBackend, DNNTarget> > > Power;
+typedef TestWithParam<tuple<Vec3f, tuple<Backend, Target> > > Power;
 TEST_P(Power, Accuracy)
 {
     float power = get<0>(GetParam())[0];
     float scale = get<0>(GetParam())[1];
     float shift = get<0>(GetParam())[2];
-    int backendId = get<0>(get<1>(GetParam()));
-    int targetId = get<1>(get<1>(GetParam()));
+    Backend backendId = get<0>(get<1>(GetParam()));
+    Target targetId = get<1>(get<1>(GetParam()));
 
     LayerParams lp;
     lp.set("power", power);
@@ -582,12 +595,12 @@ TEST_P(Test_Halide_layers, ChannelsPReLU)
     testInPlaceActivation(lp, backend, target);
 }
 
-typedef TestWithParam<tuple<bool, tuple<DNNBackend, DNNTarget> > > Scale;
+typedef TestWithParam<tuple<bool, tuple<Backend, Target> > > Scale;
 TEST_P(Scale, Accuracy)
 {
     bool hasBias = get<0>(GetParam());
-    int backendId = get<0>(get<1>(GetParam()));
-    int targetId = get<1>(get<1>(GetParam()));
+    Backend backendId = get<0>(get<1>(GetParam()));
+    Target targetId = get<1>(get<1>(GetParam()));
 
     LayerParams lp;
     lp.set("bias_term", hasBias);
@@ -616,13 +629,13 @@ INSTANTIATE_TEST_CASE_P(Layer_Test_Halide, Scale, Combine(
 //      `--- conv ----^ ^ ^
 //      `---- ... ------' '
 //      `-----------------'
-typedef TestWithParam<tuple<Vec3i, Vec3i, tuple<DNNBackend, DNNTarget> > > Concat;
+typedef TestWithParam<tuple<Vec3i, Vec3i, tuple<Backend, Target> > > Concat;
 TEST_P(Concat, Accuracy)
 {
     Vec3i inSize = get<0>(GetParam());
     Vec3i numChannels = get<1>(GetParam());
-    int backendId = get<0>(get<2>(GetParam()));
-    int targetId = get<1>(get<2>(GetParam()));
+    Backend backendId = get<0>(get<2>(GetParam()));
+    Target targetId = get<1>(get<2>(GetParam()));
 
     Net net;
 
@@ -682,19 +695,15 @@ INSTANTIATE_TEST_CASE_P(Layer_Test_Halide, Concat, Combine(
 //      `--- conv ----^ ^ ^
 //      `---- ... ------' '
 //      `-----------------'
-typedef TestWithParam<tuple<Vec3i, std::string, int, bool, tuple<DNNBackend, DNNTarget> > > Eltwise;
+typedef TestWithParam<tuple<Vec3i, std::string, int, bool, tuple<Backend, Target> > > Eltwise;
 TEST_P(Eltwise, Accuracy)
 {
     Vec3i inSize = get<0>(GetParam());
     std::string op = get<1>(GetParam());
     int numConv = get<2>(GetParam());
     bool weighted = get<3>(GetParam());
-    int backendId = get<0>(get<4>(GetParam()));
-    int targetId = get<1>(get<4>(GetParam()));
-
-    if (backendId == DNN_BACKEND_OPENCV &&
-        (targetId == DNN_TARGET_OPENCL || targetId == DNN_TARGET_OPENCL_FP16))
-        throw SkipTestException("");
+    Backend backendId = get<0>(get<4>(GetParam()));
+    Target targetId = get<1>(get<4>(GetParam()));
 
     Net net;
 

@@ -277,6 +277,7 @@ struct CvCaptureCAM_V4L CV_FINAL : public CvCapture
 
     __u32 palette;
     int width, height;
+    int width_set, height_set;
     int bufferSize;
     __u32 fps;
     bool convert_rgb;
@@ -430,6 +431,7 @@ static int autosetup_capture_mode_v4l2(CvCaptureCAM_V4L* capture) {
             V4L2_PIX_FMT_BGR24,
             V4L2_PIX_FMT_RGB24,
             V4L2_PIX_FMT_YVU420,
+            V4L2_PIX_FMT_YUV420,
             V4L2_PIX_FMT_YUV411P,
             V4L2_PIX_FMT_YUYV,
             V4L2_PIX_FMT_UYVY,
@@ -531,6 +533,7 @@ static int v4l2_set_fps(CvCaptureCAM_V4L* capture) {
 static int v4l2_num_channels(__u32 palette) {
     switch(palette) {
     case V4L2_PIX_FMT_YVU420:
+    case V4L2_PIX_FMT_YUV420:
     case V4L2_PIX_FMT_MJPEG:
     case V4L2_PIX_FMT_JPEG:
     case V4L2_PIX_FMT_Y16:
@@ -561,6 +564,7 @@ static void v4l2_create_frame(CvCaptureCAM_V4L *capture) {
             size = CvSize(capture->buffers[capture->bufferIndex].length, 1);
             break;
         case V4L2_PIX_FMT_YVU420:
+        case V4L2_PIX_FMT_YUV420:
             size.height = size.height * 3 / 2; // "1.5" channels
             break;
         case V4L2_PIX_FMT_Y16:
@@ -797,6 +801,7 @@ bool CvCaptureCAM_V4L::open(const char* _deviceName)
     FirstCapture = 1;
     width = DEFAULT_V4L_WIDTH;
     height = DEFAULT_V4L_HEIGHT;
+    width_set = height_set = 0;
     bufferSize = DEFAULT_V4L_BUFFERS;
     fps = DEFAULT_V4L_FPS;
     convert_rgb = true;
@@ -854,45 +859,39 @@ static int read_frame_v4l2(CvCaptureCAM_V4L* capture) {
 }
 
 static int mainloop_v4l2(CvCaptureCAM_V4L* capture) {
-    unsigned int count;
+    for (;;) {
+        fd_set fds;
+        struct timeval tv;
+        int r;
 
-    count = 1;
+        FD_ZERO (&fds);
+        FD_SET (capture->deviceHandle, &fds);
 
-    while (count-- > 0) {
-        for (;;) {
-            fd_set fds;
-            struct timeval tv;
-            int r;
+        /* Timeout. */
+        tv.tv_sec = 10;
+        tv.tv_usec = 0;
 
-            FD_ZERO (&fds);
-            FD_SET (capture->deviceHandle, &fds);
+        r = select (capture->deviceHandle+1, &fds, NULL, NULL, &tv);
 
-            /* Timeout. */
-            tv.tv_sec = 10;
-            tv.tv_usec = 0;
+        if (-1 == r) {
+            if (EINTR == errno)
+                continue;
 
-            r = select (capture->deviceHandle+1, &fds, NULL, NULL, &tv);
-
-            if (-1 == r) {
-                if (EINTR == errno)
-                    continue;
-
-                perror ("select");
-            }
-
-            if (0 == r) {
-                fprintf (stderr, "select timeout\n");
-
-                /* end the infinite loop */
-                break;
-            }
-
-            int returnCode = read_frame_v4l2 (capture);
-            if(returnCode == -1)
-                return -1;
-            if(returnCode == 1)
-                return 1;
+            perror ("select");
         }
+
+        if (0 == r) {
+            fprintf (stderr, "select timeout\n");
+
+            /* end the infinite loop */
+            break;
+        }
+
+        int returnCode = read_frame_v4l2 (capture);
+        if(returnCode == -1)
+            return -1;
+        if(returnCode == 1)
+            return 1;
     }
     return 0;
 }
@@ -1019,10 +1018,10 @@ move_411_block(int yTL, int yTR, int yBL, int yBR, int u, int v,
 
 /* Converts from planar YUV420P to RGB24. */
 static inline void
-yuv420p_to_rgb24(int width, int height, uchar* src, uchar* dst)
+yuv420p_to_rgb24(int width, int height, uchar* src, uchar* dst, bool isYUV)
 {
     cvtColor(Mat(height * 3 / 2, width, CV_8U, src), Mat(height, width, CV_8UC3, dst),
-            COLOR_YUV2BGR_YV12);
+            isYUV ? COLOR_YUV2BGR_IYUV : COLOR_YUV2BGR_YV12);
 }
 
 // Consider a YUV411P image of 8x2 pixels.
@@ -1488,10 +1487,12 @@ static IplImage* icvRetrieveFrameCAM_V4L( CvCaptureCAM_V4L* capture, int) {
         break;
 
     case V4L2_PIX_FMT_YVU420:
+    case V4L2_PIX_FMT_YUV420:
         yuv420p_to_rgb24(capture->form.fmt.pix.width,
                 capture->form.fmt.pix.height,
                 (unsigned char*)(capture->buffers[capture->bufferIndex].start),
-                (unsigned char*)capture->frame.imageData);
+                (unsigned char*)capture->frame.imageData,
+                capture->palette == V4L2_PIX_FMT_YUV420);
         break;
 
     case V4L2_PIX_FMT_YUV411P:
@@ -1769,7 +1770,6 @@ static bool icvSetControl (CvCaptureCAM_V4L* capture,
 
 static int icvSetPropertyCAM_V4L( CvCaptureCAM_V4L* capture,
         int property_id, double value ){
-    static int width = 0, height = 0;
     bool retval = false;
     bool possible;
 
@@ -1778,6 +1778,9 @@ static int icvSetPropertyCAM_V4L( CvCaptureCAM_V4L* capture,
 
     switch (property_id) {
     case CV_CAP_PROP_FRAME_WIDTH:
+    {
+        int& width = capture->width_set;
+        int& height = capture->height_set;
         width = cvRound(value);
         retval = width != 0;
         if(width !=0 && height != 0) {
@@ -1786,8 +1789,12 @@ static int icvSetPropertyCAM_V4L( CvCaptureCAM_V4L* capture,
             retval = v4l2_reset(capture);
             width = height = 0;
         }
-        break;
+    }
+    break;
     case CV_CAP_PROP_FRAME_HEIGHT:
+    {
+        int& width = capture->width_set;
+        int& height = capture->height_set;
         height = cvRound(value);
         retval = height != 0;
         if(width !=0 && height != 0) {
@@ -1796,7 +1803,8 @@ static int icvSetPropertyCAM_V4L( CvCaptureCAM_V4L* capture,
             retval = v4l2_reset(capture);
             width = height = 0;
         }
-        break;
+    }
+    break;
     case CV_CAP_PROP_FPS:
         capture->fps = value;
         retval = v4l2_reset(capture);

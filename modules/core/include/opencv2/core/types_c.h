@@ -629,7 +629,6 @@ CV_INLINE int cvIplDepth( int type )
 #define CV_TYPE_NAME_MATND    "opencv-nd-matrix"
 
 #define CV_MAX_DIM            32
-#define CV_MAX_DIM_HEAP       1024
 
 /**
   @deprecated consider using cv::Mat instead
@@ -1765,7 +1764,7 @@ typedef struct CvString
 }
 CvString;
 
-/** All the keys (names) of elements in the readed file storage
+/** All the keys (names) of elements in the read file storage
    are stored in the hash to speed up the lookup operations: */
 typedef struct CvStringHashNode
 {

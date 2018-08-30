@@ -14,7 +14,7 @@ namespace cv { namespace dnn {
 class ResizeLayerImpl : public ResizeLayer
 {
 public:
-    ResizeLayerImpl(const LayerParams& params)
+    ResizeLayerImpl(const LayerParams& params) : zoomFactorWidth(0), zoomFactorHeight(0), scaleWidth(0), scaleHeight(0)
     {
         setParamsFrom(params);
         outWidth = params.get<float>("width", 0);
@@ -33,9 +33,7 @@ public:
         interpolation = params.get<String>("interpolation");
         CV_Assert(interpolation == "nearest" || interpolation == "bilinear");
 
-        bool alignCorners = params.get<bool>("align_corners", false);
-        if (alignCorners)
-            CV_Error(Error::StsNotImplemented, "Resize with align_corners=true is not implemented");
+        alignCorners = params.get<bool>("align_corners", false);
     }
 
     bool getMemoryShapes(const std::vector<MatShape> &inputs,
@@ -43,7 +41,7 @@ public:
                          std::vector<MatShape> &outputs,
                          std::vector<MatShape> &internals) const CV_OVERRIDE
     {
-        CV_Assert(inputs.size() == 1, inputs[0].size() == 4);
+        CV_Assert_N(inputs.size() == 1, inputs[0].size() == 4);
         outputs.resize(1, inputs[0]);
         outputs[0][2] = outHeight > 0 ? outHeight : (outputs[0][2] * zoomFactorHeight);
         outputs[0][3] = outWidth > 0 ? outWidth : (outputs[0][3] * zoomFactorWidth);
@@ -66,8 +64,15 @@ public:
             outHeight = outputs[0].size[2];
             outWidth = outputs[0].size[3];
         }
-        scaleHeight = static_cast<float>(inputs[0]->size[2]) / outHeight;
-        scaleWidth = static_cast<float>(inputs[0]->size[3]) / outWidth;
+        if (alignCorners && outHeight > 1)
+            scaleHeight = static_cast<float>(inputs[0]->size[2] - 1) / (outHeight - 1);
+        else
+            scaleHeight = static_cast<float>(inputs[0]->size[2]) / outHeight;
+
+        if (alignCorners && outWidth > 1)
+            scaleWidth = static_cast<float>(inputs[0]->size[3] - 1) / (outWidth - 1);
+        else
+            scaleWidth = static_cast<float>(inputs[0]->size[3]) / outWidth;
     }
 
     void forward(InputArrayOfArrays inputs_arr, OutputArrayOfArrays outputs_arr, OutputArrayOfArrays internals_arr) CV_OVERRIDE
@@ -106,7 +111,7 @@ public:
             const int inpSpatialSize = inpHeight * inpWidth;
             const int outSpatialSize = outHeight * outWidth;
             const int numPlanes = inp.size[0] * inp.size[1];
-            CV_Assert(inp.isContinuous(), out.isContinuous());
+            CV_Assert_N(inp.isContinuous(), out.isContinuous());
 
             Mat inpPlanes = inp.reshape(1, numPlanes * inpHeight);
             Mat outPlanes = out.reshape(1, numPlanes * outHeight);
@@ -166,6 +171,7 @@ protected:
     int outWidth, outHeight, zoomFactorWidth, zoomFactorHeight;
     String interpolation;
     float scaleWidth, scaleHeight;
+    bool alignCorners;
 };
 
 
@@ -184,7 +190,7 @@ public:
                          std::vector<MatShape> &outputs,
                          std::vector<MatShape> &internals) const CV_OVERRIDE
     {
-        CV_Assert(inputs.size() == 1, inputs[0].size() == 4);
+        CV_Assert_N(inputs.size() == 1, inputs[0].size() == 4);
         outputs.resize(1, inputs[0]);
         outputs[0][2] = outHeight > 0 ? outHeight : (1 + zoomFactorHeight * (outputs[0][2] - 1));
         outputs[0][3] = outWidth > 0 ? outWidth : (1 + zoomFactorWidth * (outputs[0][3] - 1));

@@ -359,7 +359,7 @@ public:
             {
                 if (!layerParams.get<bool>("use_global_stats", true))
                 {
-                    CV_Assert(layer.bottom_size() == 1, layer.top_size() == 1);
+                    CV_Assert_N(layer.bottom_size() == 1, layer.top_size() == 1);
 
                     LayerParams mvnParams;
                     mvnParams.set("eps", layerParams.get<float>("eps", 1e-5));
@@ -451,6 +451,15 @@ Net readNetFromCaffe(const char *bufferProto, size_t lenProto,
     Net net;
     caffeImporter.populateNet(net);
     return net;
+}
+
+Net readNetFromCaffe(const std::vector<uchar>& bufferProto, const std::vector<uchar>& bufferModel)
+{
+    const char* bufferProtoPtr = reinterpret_cast<const char*>(&bufferProto[0]);
+    const char* bufferModelPtr = bufferModel.empty() ? NULL :
+                                 reinterpret_cast<const char*>(&bufferModel[0]);
+    return readNetFromCaffe(bufferProtoPtr, bufferProto.size(),
+                            bufferModelPtr, bufferModel.size());
 }
 
 #endif //HAVE_PROTOBUF

@@ -85,12 +85,6 @@ else()
   set(sources_options EXCLUDE_OPENCL)
 endif()
 
-if(HAVE_INF_ENGINE)
-  add_definitions(-DHAVE_INF_ENGINE=1)
-  list(APPEND include_dirs ${INF_ENGINE_INCLUDE_DIRS})
-  list(APPEND libs ${INF_ENGINE_LIBRARIES})
-endif()
-
 ocv_module_include_directories(${include_dirs})
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
   ocv_append_source_files_cxx_compiler_options(fw_srcs "-Wno-suggest-override")  # GCC
@@ -98,9 +92,9 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
   ocv_append_source_files_cxx_compiler_options(fw_srcs "-Wno-inconsistent-missing-override")  # Clang
 endif()
 ocv_glob_module_sources(${sources_options} SOURCES ${fw_srcs})
-ocv_create_module(${libs})
+ocv_create_module(${libs} ${INF_ENGINE_TARGET})
 ocv_add_samples()
-ocv_add_accuracy_tests()
+ocv_add_accuracy_tests(${INF_ENGINE_TARGET})
 ocv_add_perf_tests()
 
 ocv_option(${the_module}_PERF_CAFFE "Add performance tests of Caffe framework" OFF)

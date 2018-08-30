@@ -12,17 +12,19 @@ else:
 
 ignored_arg_types = ["RNG*"]
 
+pass_by_val_types = ["Point*", "Point2f*", "Rect*", "String*", "double*", "float*", "int*"]
+
 gen_template_check_self = Template("""    $cname* _self_ = NULL;
     if(PyObject_TypeCheck(self, &pyopencv_${name}_Type))
         _self_ = ${amp}((pyopencv_${name}_t*)self)->v${get};
-    if (_self_ == NULL)
+    if (!_self_)
         return failmsgp("Incorrect type of self (must be '${name}' or its derivative)");
 """)
 
 gen_template_check_self_algo = Template("""    $cname* _self_ = NULL;
     if(PyObject_TypeCheck(self, &pyopencv_${name}_Type))
         _self_ = dynamic_cast<$cname*>(${amp}((pyopencv_${name}_t*)self)->v.get());
-    if (_self_ == NULL)
+    if (!_self_)
         return failmsgp("Incorrect type of self (must be '${name}' or its derivative)");
 """)
 
@@ -77,18 +79,27 @@ template<> PyObject* pyopencv_from(const ${cname}& r)
 
 template<> bool pyopencv_to(PyObject* src, ${cname}& dst, const char* name)
 {
-    if( src == NULL || src == Py_None )
+    if(!src || src == Py_None)
         return true;
-    if(!PyObject_TypeCheck(src, &pyopencv_${name}_Type))
+    if(PyObject_TypeCheck(src, &pyopencv_${name}_Type))
     {
-        failmsg("Expected ${cname} for argument '%%s'", name);
-        return false;
+        dst = ((pyopencv_${name}_t*)src)->v;
+        return true;
     }
-    dst = ((pyopencv_${name}_t*)src)->v;
-    return true;
+    failmsg("Expected ${cname} for argument '%%s'", name);
+    return false;
 }
 """ % head_init_str)
 
+gen_template_mappable = Template("""
+    {
+        ${mappable} _src;
+        if (pyopencv_to(src, _src, name))
+        {
+            return cv_mappable_to(_src, dst);
+        }
+    }
+""")
 
 gen_template_type_decl = Template("""
 struct pyopencv_${name}_t
@@ -120,15 +131,16 @@ template<> PyObject* pyopencv_from(const Ptr<${cname}>& r)
 
 template<> bool pyopencv_to(PyObject* src, Ptr<${cname}>& dst, const char* name)
 {
-    if( src == NULL || src == Py_None )
+    if(!src || src == Py_None)
         return true;
-    if(!PyObject_TypeCheck(src, &pyopencv_${name}_Type))
+    if(PyObject_TypeCheck(src, &pyopencv_${name}_Type))
     {
-        failmsg("Expected ${cname} for argument '%%s'", name);
-        return false;
+        dst = ((pyopencv_${name}_t*)src)->v.dynamicCast<${cname}>();
+        return true;
     }
-    dst = ((pyopencv_${name}_t*)src)->v.dynamicCast<${cname}>();
-    return true;
+    ${mappable_code}
+    failmsg("Expected ${cname} for argument '%%s'", name);
+    return false;
 }
 
 """ % head_init_str)
@@ -192,7 +204,7 @@ gen_template_get_prop_algo = Template("""
 static PyObject* pyopencv_${name}_get_${member}(pyopencv_${name}_t* p, void *closure)
 {
     $cname* _self_ = dynamic_cast<$cname*>(p->v.get());
-    if (_self_ == NULL)
+    if (!_self_)
         return failmsgp("Incorrect type of object (must be '${name}' or its derivative)");
     return pyopencv_from(_self_${access}${member});
 }
@@ -201,7 +213,7 @@ static PyObject* pyopencv_${name}_get_${member}(pyopencv_${name}_t* p, void *clo
 gen_template_set_prop = Template("""
 static int pyopencv_${name}_set_${member}(pyopencv_${name}_t* p, PyObject *value, void *closure)
 {
-    if (value == NULL)
+    if (!value)
     {
         PyErr_SetString(PyExc_TypeError, "Cannot delete the ${member} attribute");
         return -1;
@@ -213,13 +225,13 @@ static int pyopencv_${name}_set_${member}(pyopencv_${name}_t* p, PyObject *value
 gen_template_set_prop_algo = Template("""
 static int pyopencv_${name}_set_${member}(pyopencv_${name}_t* p, PyObject *value, void *closure)
 {
-    if (value == NULL)
+    if (!value)
     {
         PyErr_SetString(PyExc_TypeError, "Cannot delete the ${member} attribute");
         return -1;
     }
     $cname* _self_ = dynamic_cast<$cname*>(p->v.get());
-    if (_self_ == NULL)
+    if (!_self_)
     {
         failmsgp("Incorrect type of object (must be '${name}' or its derivative)");
         return -1;
@@ -265,6 +277,7 @@ class ClassInfo(object):
         self.isalgorithm = False
         self.methods = {}
         self.props = []
+        self.mappables = []
         self.consts = {}
         self.base = None
         self.constructor = None
@@ -402,7 +415,7 @@ class ArgInfo(object):
         self.py_outputarg = False
 
     def isbig(self):
-        return self.tp == "Mat" or self.tp == "vector_Mat"\
+        return self.tp == "Mat" or self.tp == "vector_Mat" or self.tp == "cuda::GpuMat"\
                or self.tp == "UMat" or self.tp == "vector_UMat" # or self.tp.startswith("vector")
 
     def crepr(self):
@@ -410,10 +423,11 @@ class ArgInfo(object):
 
 
 class FuncVariant(object):
-    def __init__(self, classname, name, decl, isconstructor):
+    def __init__(self, classname, name, decl, isconstructor, isphantom=False):
         self.classname = classname
         self.name = self.wname = name
         self.isconstructor = isconstructor
+        self.isphantom = isphantom
 
         self.docstring = decl[5]
 
@@ -529,8 +543,8 @@ class FuncInfo(object):
         self.isclassmethod = isclassmethod
         self.variants = []
 
-    def add_variant(self, decl):
-        self.variants.append(FuncVariant(self.classname, self.name, decl, self.isconstructor))
+    def add_variant(self, decl, isphantom=False):
+        self.variants.append(FuncVariant(self.classname, self.name, decl, self.isconstructor, isphantom))
 
     def get_wrapper_name(self):
         name = self.name
@@ -638,6 +652,9 @@ class FuncInfo(object):
             all_cargs = []
             parse_arglist = []
 
+            if v.isphantom and ismethod and not self.isclassmethod:
+                code_args += "_self_"
+
             # declare all the C function arguments,
             # add necessary conversions from Python objects to code_cvt_list,
             # form the function/method call,
@@ -656,15 +673,15 @@ class FuncInfo(object):
                 tp1 = tp = a.tp
                 amp = ""
                 defval0 = ""
-                if tp.endswith("*"):
+                if tp in pass_by_val_types:
                     tp = tp1 = tp[:-1]
                     amp = "&"
                     if tp.endswith("*"):
                         defval0 = "0"
                         tp1 = tp.replace("*", "_ptr")
-                if tp1.endswith("*"):
-                    print("Error: type with star: a.tp=%s, tp=%s, tp1=%s" % (a.tp, tp, tp1))
-                    sys.exit(-1)
+                tp_candidates = [a.tp, normalize_class_name(self.namespace + "." + a.tp)]
+                if any(tp in codegen.enum_types for tp in tp_candidates):
+                    defval0 = "static_cast<%s>(%d)" % (a.tp, 0)
 
                 amapping = simple_argtype_mapping.get(tp, (tp, "O", defval0))
                 parse_name = a.name
@@ -686,6 +703,9 @@ class FuncInfo(object):
                     if "UMat" in tp:
                         if "Mat" in defval and "UMat" not in defval:
                             defval = defval.replace("Mat", "UMat")
+                    if "cuda::GpuMat" in tp:
+                        if "Mat" in defval and "GpuMat" not in defval:
+                            defval = defval.replace("Mat", "cuda::GpuMat")
                 # "tp arg = tp();" is equivalent to "tp arg;" in the case of complex types
                 if defval == tp + "()" and amapping[1] == "O":
                     defval = ""
@@ -712,6 +732,8 @@ class FuncInfo(object):
 
                 code_prelude = templ_prelude.substitute(name=selfinfo.name, cname=selfinfo.cname)
                 code_fcall = templ.substitute(name=selfinfo.name, cname=selfinfo.cname, args=code_args)
+                if v.isphantom:
+                    code_fcall = code_fcall.replace("new " + selfinfo.cname, self.cname.replace("::", "_"))
             else:
                 code_prelude = ""
                 code_fcall = ""
@@ -754,7 +776,7 @@ class FuncInfo(object):
                     parse_arglist = ", ".join(["&" + all_cargs[argno][1] for aname, argno in v.py_arglist]),
                     code_cvt = " &&\n        ".join(code_cvt_list))
             else:
-                code_parse = "if(PyObject_Size(args) == 0 && (kw == NULL || PyObject_Size(kw) == 0))"
+                code_parse = "if(PyObject_Size(args) == 0 && (!kw || PyObject_Size(kw) == 0))"
 
             if len(v.py_outlist) == 0:
                 code_ret = "Py_RETURN_NONE"
@@ -833,6 +855,7 @@ class PythonWrapperGenerator(object):
         self.classes = {}
         self.namespaces = {}
         self.consts = {}
+        self.enum_types = []
         self.code_include = StringIO()
         self.code_types = StringIO()
         self.code_funcs = StringIO()
@@ -890,6 +913,10 @@ class PythonWrapperGenerator(object):
         py_signatures.append(dict(name=py_name, value=value))
         #print(cname + ' => ' + str(py_name) + ' (value=' + value + ')')
 
+    def add_enum(self, name, decl):
+        enumname = normalize_class_name(name)
+        self.enum_types.append(enumname)
+
     def add_func(self, decl):
         namespace, classes, barename = self.split_decl_name(decl[0])
         cname = "::".join(namespace+classes+[barename])
@@ -903,11 +930,21 @@ class PythonWrapperGenerator(object):
 
         isconstructor = name == bareclassname
         isclassmethod = False
+        isphantom = False
+        mappable = None
         for m in decl[2]:
             if m == "/S":
                 isclassmethod = True
+            elif m == "/phantom":
+                isphantom = True
+                cname = cname.replace("::", "_")
             elif m.startswith("="):
                 name = m[1:]
+            elif m.startswith("/mappable="):
+                mappable = m[10:]
+                self.classes[classname].mappables.append(mappable)
+                return
+
         if isconstructor:
             name = "_".join(classes[:-1]+[name])
 
@@ -915,13 +952,13 @@ class PythonWrapperGenerator(object):
             # Add it as a method to the class
             func_map = self.classes[classname].methods
             func = func_map.setdefault(name, FuncInfo(classname, name, cname, isconstructor, namespace, isclassmethod))
-            func.add_variant(decl)
+            func.add_variant(decl, isphantom)
 
             # Add it as global function
             g_name = "_".join(classes+[name])
             func_map = self.namespaces.setdefault(namespace, Namespace()).funcs
             func = func_map.setdefault(g_name, FuncInfo("", g_name, cname, isconstructor, namespace, False))
-            func.add_variant(decl)
+            func.add_variant(decl, isphantom)
         else:
             if classname and not isconstructor:
                 cname = barename
@@ -930,7 +967,7 @@ class PythonWrapperGenerator(object):
                 func_map = self.namespaces.setdefault(namespace, Namespace()).funcs
 
             func = func_map.setdefault(name, FuncInfo(classname, name, cname, isconstructor, namespace, isclassmethod))
-            func.add_variant(decl)
+            func.add_variant(decl, isphantom)
 
         if classname and isconstructor:
             self.classes[classname].constructor = func
@@ -975,7 +1012,7 @@ class PythonWrapperGenerator(object):
 
     def gen(self, srcfiles, output_path):
         self.clear()
-        self.parser = hdr_parser.CppHeaderParser(generate_umat_decls=True)
+        self.parser = hdr_parser.CppHeaderParser(generate_umat_decls=True, generate_gpumat_decls=True)
 
         # step 1: scan the headers and build more descriptive maps of classes, consts, functions
         for hdr in srcfiles:
@@ -994,6 +1031,9 @@ class PythonWrapperGenerator(object):
                 elif name.startswith("const"):
                     # constant
                     self.add_const(name.replace("const ", "").strip(), decl)
+                elif name.startswith("enum"):
+                    # enum
+                    self.add_enum(name.replace("enum ", "").strip(), decl)
                 else:
                     # function
                     self.add_func(decl)
@@ -1043,8 +1083,11 @@ class PythonWrapperGenerator(object):
                     templ = gen_template_simple_type_decl
                 else:
                     templ = gen_template_type_decl
+                mappable_code = "\n".join([
+                                      gen_template_mappable.substitute(cname=classinfo.cname, mappable=mappable)
+                                          for mappable in classinfo.mappables])
                 self.code_types.write(templ.substitute(name=name, wname=classinfo.wname, cname=classinfo.cname, sname=classinfo.sname,
-                                      cname1=("cv::Algorithm" if classinfo.isalgorithm else classinfo.cname)))
+                                      cname1=("cv::Algorithm" if classinfo.isalgorithm else classinfo.cname), mappable_code=mappable_code))
 
         # register classes in the same order as they have been declared.
         # this way, base classes will be registered in Python before their derivatives.
