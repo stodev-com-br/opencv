@@ -943,8 +943,8 @@ public:
     void printErrors() const;
 
 protected:
-    void getByName(const String& name, bool space_delete, int type, void* dst) const;
-    void getByIndex(int index, bool space_delete, int type, void* dst) const;
+    void getByName(const String& name, bool space_delete, Param type, void* dst) const;
+    void getByIndex(int index, bool space_delete, Param type, void* dst) const;
 
     struct Impl;
     Impl* impl;
@@ -1052,15 +1052,6 @@ AutoBuffer<_Tp, fixed_size>::resize(size_t _size)
 template<typename _Tp, size_t fixed_size> inline size_t
 AutoBuffer<_Tp, fixed_size>::size() const
 { return sz; }
-
-template<> inline std::string CommandLineParser::get<std::string>(int index, bool space_delete) const
-{
-    return get<String>(index, space_delete);
-}
-template<> inline std::string CommandLineParser::get<std::string>(const String& name, bool space_delete) const
-{
-    return get<String>(name, space_delete);
-}
 
 //! @endcond
 

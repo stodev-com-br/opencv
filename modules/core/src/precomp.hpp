@@ -200,7 +200,7 @@ struct NoVec
     size_t operator()(const void*, const void*, void*, size_t) const { return 0; }
 };
 
-#define CV_SPLIT_MERGE_MAX_BLOCK_SIZE(cn) ((INT_MAX/4)/cn) // HAL implementation accepts 'int' len, so INT_MAX doesn't work here
+#define CV_SPLIT_MERGE_MAX_BLOCK_SIZE(cn) ((INT_MAX/4)/(cn)) // HAL implementation accepts 'int' len, so INT_MAX doesn't work here
 
 enum { BLOCK_SIZE = 1024 };
 
@@ -210,7 +210,7 @@ enum { BLOCK_SIZE = 1024 };
 #define ARITHM_USE_IPP 0
 #endif
 
-inline bool checkScalar(const Mat& sc, int atype, int sckind, int akind)
+inline bool checkScalar(const Mat& sc, int atype, _InputArray::KindFlag sckind, _InputArray::KindFlag akind)
 {
     if( sc.dims > 2 || !sc.isContinuous() )
         return false;
@@ -224,7 +224,7 @@ inline bool checkScalar(const Mat& sc, int atype, int sckind, int akind)
            (sz == Size(1, 4) && sc.type() == CV_64F && cn <= 4);
 }
 
-inline bool checkScalar(InputArray sc, int atype, int sckind, int akind)
+inline bool checkScalar(InputArray sc, int atype, _InputArray::KindFlag sckind, _InputArray::KindFlag akind)
 {
     if( sc.dims() > 2 || !sc.isContinuous() )
         return false;

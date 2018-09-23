@@ -7,7 +7,7 @@
 
 namespace cv {
 
-void MatAllocator::map(UMatData*, int) const
+void MatAllocator::map(UMatData*, AccessFlag) const
 {
 }
 
@@ -85,7 +85,7 @@ void MatAllocator::copy(UMatData* usrc, UMatData* udst, int dims, const size_t s
                   const size_t srcofs[], const size_t srcstep[],
                   const size_t dstofs[], const size_t dststep[], bool /*sync*/) const
 {
-    CV_INSTRUMENT_REGION()
+    CV_INSTRUMENT_REGION();
 
     if(!usrc || !udst)
         return;
@@ -118,7 +118,7 @@ void MatAllocator::copy(UMatData* usrc, UMatData* udst, int dims, const size_t s
 
 BufferPoolController* MatAllocator::getBufferPoolController(const char* id) const
 {
-    (void)id;
+    CV_UNUSED(id);
     static DummyBufferPoolController dummy;
     return &dummy;
 }
@@ -127,7 +127,7 @@ class StdMatAllocator CV_FINAL : public MatAllocator
 {
 public:
     UMatData* allocate(int dims, const int* sizes, int type,
-                       void* data0, size_t* step, int /*flags*/, UMatUsageFlags /*usageFlags*/) const CV_OVERRIDE
+                       void* data0, size_t* step, AccessFlag /*flags*/, UMatUsageFlags /*usageFlags*/) const CV_OVERRIDE
     {
         size_t total = CV_ELEM_SIZE(type);
         for( int i = dims-1; i >= 0; i-- )
@@ -154,7 +154,7 @@ public:
         return u;
     }
 
-    bool allocate(UMatData* u, int /*accessFlags*/, UMatUsageFlags /*usageFlags*/) const CV_OVERRIDE
+    bool allocate(UMatData* u, AccessFlag /*accessFlags*/, UMatUsageFlags /*usageFlags*/) const CV_OVERRIDE
     {
         if(!u) return false;
         return true;
@@ -357,13 +357,13 @@ void Mat::create(int d, const int* _sizes, int _type)
             a = a0;
         CV_TRY
         {
-            u = a->allocate(dims, size, _type, 0, step.p, 0, USAGE_DEFAULT);
+            u = a->allocate(dims, size, _type, 0, step.p, ACCESS_RW /* ignored */, USAGE_DEFAULT);
             CV_Assert(u != 0);
         }
         CV_CATCH_ALL
         {
             if(a != a0)
-                u = a0->allocate(dims, size, _type, 0, step.p, 0, USAGE_DEFAULT);
+                u = a0->allocate(dims, size, _type, 0, step.p, ACCESS_RW /* ignored */, USAGE_DEFAULT);
             CV_Assert(u != 0);
         }
         CV_Assert( step[dims-1] == (size_t)CV_ELEM_SIZE(flags) );

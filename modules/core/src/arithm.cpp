@@ -167,7 +167,7 @@ static void binary_op( InputArray _src1, InputArray _src2, OutputArray _dst,
                        bool bitwise, int oclop )
 {
     const _InputArray *psrc1 = &_src1, *psrc2 = &_src2;
-    int kind1 = psrc1->kind(), kind2 = psrc2->kind();
+    _InputArray::KindFlag kind1 = psrc1->kind(), kind2 = psrc2->kind();
     int type1 = psrc1->type(), depth1 = CV_MAT_DEPTH(type1), cn = CV_MAT_CN(type1);
     int type2 = psrc2->type(), depth2 = CV_MAT_DEPTH(type2), cn2 = CV_MAT_CN(type2);
     int dims1 = psrc1->dims(), dims2 = psrc2->dims();
@@ -270,7 +270,7 @@ static void binary_op( InputArray _src1, InputArray _src2, OutputArray _dst,
     if( !haveScalar )
     {
         const Mat* arrays[] = { &src1, &src2, &dst, &mask, 0 };
-        uchar* ptrs[4];
+        uchar* ptrs[4] = {};
 
         NAryMatIterator it(arrays, ptrs);
         size_t total = it.size, blocksize = total;
@@ -306,7 +306,7 @@ static void binary_op( InputArray _src1, InputArray _src2, OutputArray _dst,
     else
     {
         const Mat* arrays[] = { &src1, &dst, &mask, 0 };
-        uchar* ptrs[3];
+        uchar* ptrs[3] = {};
 
         NAryMatIterator it(arrays, ptrs);
         size_t total = it.size, blocksize = std::min(total, blocksize0);
@@ -369,7 +369,7 @@ static BinaryFuncC* getMinTab()
 
 void cv::bitwise_and(InputArray a, InputArray b, OutputArray c, InputArray mask)
 {
-    CV_INSTRUMENT_REGION()
+    CV_INSTRUMENT_REGION();
 
     BinaryFuncC f = (BinaryFuncC)GET_OPTIMIZED(cv::hal::and8u);
     binary_op(a, b, c, mask, &f, true, OCL_OP_AND);
@@ -377,7 +377,7 @@ void cv::bitwise_and(InputArray a, InputArray b, OutputArray c, InputArray mask)
 
 void cv::bitwise_or(InputArray a, InputArray b, OutputArray c, InputArray mask)
 {
-    CV_INSTRUMENT_REGION()
+    CV_INSTRUMENT_REGION();
 
     BinaryFuncC f = (BinaryFuncC)GET_OPTIMIZED(cv::hal::or8u);
     binary_op(a, b, c, mask, &f, true, OCL_OP_OR);
@@ -385,7 +385,7 @@ void cv::bitwise_or(InputArray a, InputArray b, OutputArray c, InputArray mask)
 
 void cv::bitwise_xor(InputArray a, InputArray b, OutputArray c, InputArray mask)
 {
-    CV_INSTRUMENT_REGION()
+    CV_INSTRUMENT_REGION();
 
     BinaryFuncC f = (BinaryFuncC)GET_OPTIMIZED(cv::hal::xor8u);
     binary_op(a, b, c, mask, &f, true, OCL_OP_XOR);
@@ -393,7 +393,7 @@ void cv::bitwise_xor(InputArray a, InputArray b, OutputArray c, InputArray mask)
 
 void cv::bitwise_not(InputArray a, OutputArray c, InputArray mask)
 {
-    CV_INSTRUMENT_REGION()
+    CV_INSTRUMENT_REGION();
 
     BinaryFuncC f = (BinaryFuncC)GET_OPTIMIZED(cv::hal::not8u);
     binary_op(a, a, c, mask, &f, true, OCL_OP_NOT);
@@ -401,21 +401,21 @@ void cv::bitwise_not(InputArray a, OutputArray c, InputArray mask)
 
 void cv::max( InputArray src1, InputArray src2, OutputArray dst )
 {
-    CV_INSTRUMENT_REGION()
+    CV_INSTRUMENT_REGION();
 
     binary_op(src1, src2, dst, noArray(), getMaxTab(), false, OCL_OP_MAX );
 }
 
 void cv::min( InputArray src1, InputArray src2, OutputArray dst )
 {
-    CV_INSTRUMENT_REGION()
+    CV_INSTRUMENT_REGION();
 
     binary_op(src1, src2, dst, noArray(), getMinTab(), false, OCL_OP_MIN );
 }
 
 void cv::max(const Mat& src1, const Mat& src2, Mat& dst)
 {
-    CV_INSTRUMENT_REGION()
+    CV_INSTRUMENT_REGION();
 
     OutputArray _dst(dst);
     binary_op(src1, src2, _dst, noArray(), getMaxTab(), false, OCL_OP_MAX );
@@ -423,7 +423,7 @@ void cv::max(const Mat& src1, const Mat& src2, Mat& dst)
 
 void cv::min(const Mat& src1, const Mat& src2, Mat& dst)
 {
-    CV_INSTRUMENT_REGION()
+    CV_INSTRUMENT_REGION();
 
     OutputArray _dst(dst);
     binary_op(src1, src2, _dst, noArray(), getMinTab(), false, OCL_OP_MIN );
@@ -431,7 +431,7 @@ void cv::min(const Mat& src1, const Mat& src2, Mat& dst)
 
 void cv::max(const UMat& src1, const UMat& src2, UMat& dst)
 {
-    CV_INSTRUMENT_REGION()
+    CV_INSTRUMENT_REGION();
 
     OutputArray _dst(dst);
     binary_op(src1, src2, _dst, noArray(), getMaxTab(), false, OCL_OP_MAX );
@@ -439,7 +439,7 @@ void cv::max(const UMat& src1, const UMat& src2, UMat& dst)
 
 void cv::min(const UMat& src1, const UMat& src2, UMat& dst)
 {
-    CV_INSTRUMENT_REGION()
+    CV_INSTRUMENT_REGION();
 
     OutputArray _dst(dst);
     binary_op(src1, src2, _dst, noArray(), getMinTab(), false, OCL_OP_MIN );
@@ -600,7 +600,7 @@ static void arithm_op(InputArray _src1, InputArray _src2, OutputArray _dst,
                       void* usrdata=0, int oclop=-1 )
 {
     const _InputArray *psrc1 = &_src1, *psrc2 = &_src2;
-    int kind1 = psrc1->kind(), kind2 = psrc2->kind();
+    _InputArray::KindFlag kind1 = psrc1->kind(), kind2 = psrc2->kind();
     bool haveMask = !_mask.empty();
     bool reallocate = false;
     int type1 = psrc1->type(), depth1 = CV_MAT_DEPTH(type1), cn = CV_MAT_CN(type1);
@@ -617,7 +617,7 @@ static void arithm_op(InputArray _src1, InputArray _src2, OutputArray _dst,
     if( (kind1 == kind2 || cn == 1) && sz1 == sz2 && dims1 <= 2 && dims2 <= 2 && type1 == type2 &&
         !haveMask && ((!_dst.fixedType() && (dtype < 0 || CV_MAT_DEPTH(dtype) == depth1)) ||
                        (_dst.fixedType() && _dst.type() == type1)) &&
-        ((src1Scalar && src2Scalar) || (!src1Scalar && !src2Scalar)) )
+        (src1Scalar == src2Scalar) )
     {
         _dst.createSameSize(*psrc1, type1);
         CV_OCL_RUN(use_opencl,
@@ -745,7 +745,7 @@ static void arithm_op(InputArray _src1, InputArray _src2, OutputArray _dst,
     if( !haveScalar )
     {
         const Mat* arrays[] = { &src1, &src2, &dst, &mask, 0 };
-        uchar* ptrs[4];
+        uchar* ptrs[4] = {};
 
         NAryMatIterator it(arrays, ptrs);
         size_t total = it.size, blocksize = total;
@@ -812,7 +812,7 @@ static void arithm_op(InputArray _src1, InputArray _src2, OutputArray _dst,
     else
     {
         const Mat* arrays[] = { &src1, &dst, &mask, 0 };
-        uchar* ptrs[3];
+        uchar* ptrs[3] = {};
 
         NAryMatIterator it(arrays, ptrs);
         size_t total = it.size, blocksize = std::min(total, blocksize0);
@@ -921,7 +921,7 @@ static BinaryFuncC* getAbsDiffTab()
 void cv::add( InputArray src1, InputArray src2, OutputArray dst,
           InputArray mask, int dtype )
 {
-    CV_INSTRUMENT_REGION()
+    CV_INSTRUMENT_REGION();
 
     arithm_op(src1, src2, dst, mask, dtype, getAddTab(), false, 0, OCL_OP_ADD );
 }
@@ -929,14 +929,14 @@ void cv::add( InputArray src1, InputArray src2, OutputArray dst,
 void cv::subtract( InputArray _src1, InputArray _src2, OutputArray _dst,
                InputArray mask, int dtype )
 {
-    CV_INSTRUMENT_REGION()
+    CV_INSTRUMENT_REGION();
 
     arithm_op(_src1, _src2, _dst, mask, dtype, getSubTab(), false, 0, OCL_OP_SUB );
 }
 
 void cv::absdiff( InputArray src1, InputArray src2, OutputArray dst )
 {
-    CV_INSTRUMENT_REGION()
+    CV_INSTRUMENT_REGION();
 
     arithm_op(src1, src2, dst, noArray(), -1, getAbsDiffTab(), false, 0, OCL_OP_ABSDIFF);
 }
@@ -989,7 +989,7 @@ static BinaryFuncC* getRecipTab()
 void cv::multiply(InputArray src1, InputArray src2,
                   OutputArray dst, double scale, int dtype)
 {
-    CV_INSTRUMENT_REGION()
+    CV_INSTRUMENT_REGION();
 
     arithm_op(src1, src2, dst, noArray(), dtype, getMulTab(),
               true, &scale, std::abs(scale - 1.0) < DBL_EPSILON ? OCL_OP_MUL : OCL_OP_MUL_SCALE);
@@ -998,7 +998,7 @@ void cv::multiply(InputArray src1, InputArray src2,
 void cv::divide(InputArray src1, InputArray src2,
                 OutputArray dst, double scale, int dtype)
 {
-    CV_INSTRUMENT_REGION()
+    CV_INSTRUMENT_REGION();
 
     arithm_op(src1, src2, dst, noArray(), dtype, getDivTab(), true, &scale, OCL_OP_DIV_SCALE);
 }
@@ -1006,7 +1006,7 @@ void cv::divide(InputArray src1, InputArray src2,
 void cv::divide(double scale, InputArray src2,
                 OutputArray dst, int dtype)
 {
-    CV_INSTRUMENT_REGION()
+    CV_INSTRUMENT_REGION();
 
     arithm_op(src2, src2, dst, noArray(), dtype, getRecipTab(), true, &scale, OCL_OP_RECIP_SCALE);
 }
@@ -1035,7 +1035,7 @@ static BinaryFuncC* getAddWeightedTab()
 void cv::addWeighted( InputArray src1, double alpha, InputArray src2,
                       double beta, double gamma, OutputArray dst, int dtype )
 {
-    CV_INSTRUMENT_REGION()
+    CV_INSTRUMENT_REGION();
 
     double scalars[] = {alpha, beta, gamma};
     arithm_op(src1, src2, dst, noArray(), dtype, getAddWeightedTab(), true, scalars, OCL_OP_ADDW);
@@ -1175,7 +1175,7 @@ static bool ocl_compare(InputArray _src1, InputArray _src2, OutputArray _dst, in
 
 void cv::compare(InputArray _src1, InputArray _src2, OutputArray _dst, int op)
 {
-    CV_INSTRUMENT_REGION()
+    CV_INSTRUMENT_REGION();
 
     CV_Assert( op == CMP_LT || op == CMP_LE || op == CMP_EQ ||
                op == CMP_NE || op == CMP_GE || op == CMP_GT );
@@ -1204,7 +1204,7 @@ void cv::compare(InputArray _src1, InputArray _src2, OutputArray _dst, int op)
             compare(_src2, _src1, _dst, op);
             return;
         }
-        else if( (is_src1_scalar && is_src2_scalar) || (!is_src1_scalar && !is_src2_scalar) )
+        else if(is_src1_scalar == is_src2_scalar)
             CV_Error( CV_StsUnmatchedSizes,
                      "The operation is neither 'array op array' (where arrays have the same size and the same type), "
                      "nor 'array op scalar', nor 'scalar op array'" );
@@ -1214,7 +1214,7 @@ void cv::compare(InputArray _src1, InputArray _src2, OutputArray _dst, int op)
     CV_OCL_RUN(_src1.dims() <= 2 && _src2.dims() <= 2 && OCL_PERFORMANCE_CHECK(_dst.isUMat()),
                ocl_compare(_src1, _src2, _dst, op, haveScalar))
 
-    int kind1 = _src1.kind(), kind2 = _src2.kind();
+    _InputArray::KindFlag kind1 = _src1.kind(), kind2 = _src2.kind();
     Mat src1 = _src1.getMat(), src2 = _src2.getMat();
 
     if( kind1 == kind2 && src1.dims <= 2 && src2.dims <= 2 && src1.size() == src2.size() && src1.type() == src2.type() )
@@ -1240,7 +1240,7 @@ void cv::compare(InputArray _src1, InputArray _src2, OutputArray _dst, int op)
     if( !haveScalar )
     {
         const Mat* arrays[] = { &src1, &src2, &dst, 0 };
-        uchar* ptrs[3];
+        uchar* ptrs[3] = {};
 
         NAryMatIterator it(arrays, ptrs);
         size_t total = it.size;
@@ -1251,7 +1251,7 @@ void cv::compare(InputArray _src1, InputArray _src2, OutputArray _dst, int op)
     else
     {
         const Mat* arrays[] = { &src1, &dst, 0 };
-        uchar* ptrs[2];
+        uchar* ptrs[2] = {};
 
         NAryMatIterator it(arrays, ptrs);
         size_t total = it.size, blocksize = std::min(total, blocksize0);
@@ -1587,7 +1587,7 @@ static bool ocl_inRange( InputArray _src, InputArray _lowerb,
                          InputArray _upperb, OutputArray _dst )
 {
     const ocl::Device & d = ocl::Device::getDefault();
-    int skind = _src.kind(), lkind = _lowerb.kind(), ukind = _upperb.kind();
+    _InputArray::KindFlag skind = _src.kind(), lkind = _lowerb.kind(), ukind = _upperb.kind();
     Size ssize = _src.size(), lsize = _lowerb.size(), usize = _upperb.size();
     int stype = _src.type(), ltype = _lowerb.type(), utype = _upperb.type();
     int sdepth = CV_MAT_DEPTH(stype), ldepth = CV_MAT_DEPTH(ltype), udepth = CV_MAT_DEPTH(utype);
@@ -1704,7 +1704,7 @@ static bool ocl_inRange( InputArray _src, InputArray _lowerb,
 void cv::inRange(InputArray _src, InputArray _lowerb,
                  InputArray _upperb, OutputArray _dst)
 {
-    CV_INSTRUMENT_REGION()
+    CV_INSTRUMENT_REGION();
 
     CV_Assert(! _src.empty());
 
@@ -1712,7 +1712,7 @@ void cv::inRange(InputArray _src, InputArray _lowerb,
                _upperb.dims() <= 2 && OCL_PERFORMANCE_CHECK(_dst.isUMat()),
                ocl_inRange(_src, _lowerb, _upperb, _dst))
 
-    int skind = _src.kind(), lkind = _lowerb.kind(), ukind = _upperb.kind();
+    _InputArray::KindFlag skind = _src.kind(), lkind = _lowerb.kind(), ukind = _upperb.kind();
     Mat src = _src.getMat(), lb = _lowerb.getMat(), ub = _upperb.getMat();
 
     bool lbScalar = false, ubScalar = false;
@@ -1748,7 +1748,7 @@ void cv::inRange(InputArray _src, InputArray _lowerb,
 
     const Mat* arrays_sc[] = { &src, &dst, 0 };
     const Mat* arrays_nosc[] = { &src, &dst, &lb, &ub, 0 };
-    uchar* ptrs[4];
+    uchar* ptrs[4] = {};
 
     NAryMatIterator it(lbScalar && ubScalar ? arrays_sc : arrays_nosc, ptrs);
     size_t total = it.size, blocksize = std::min(total, blocksize0);
@@ -2502,7 +2502,7 @@ void absdiff64f( const double* src1, size_t step1,
 #define CALL_IPP_UN(fun) \
     CV_IPP_CHECK() \
     { \
-        fixSteps(width, height, sizeof(dst[0]), step1, step2, step); (void)src2; \
+        fixSteps(width, height, sizeof(dst[0]), step1, step2, step); CV_UNUSED(src2); \
         if (0 <= CV_INSTRUMENT_FUN_IPP(fun, src1, (int)step1, dst, (int)step, ippiSize(width, height))) \
         { \
             CV_IMPL_ADD(CV_IMPL_IPP); \

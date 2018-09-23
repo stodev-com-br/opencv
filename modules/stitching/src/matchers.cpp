@@ -183,7 +183,7 @@ private:
 
 void CpuMatcher::match(const ImageFeatures &features1, const ImageFeatures &features2, MatchesInfo& matches_info)
 {
-    CV_INSTRUMENT_REGION()
+    CV_INSTRUMENT_REGION();
 
     CV_Assert(features1.descriptors.type() == features2.descriptors.type());
     CV_Assert(features2.descriptors.depth() == CV_8U || features2.descriptors.depth() == CV_32F);
@@ -248,7 +248,7 @@ void CpuMatcher::match(const ImageFeatures &features1, const ImageFeatures &feat
 #ifdef HAVE_OPENCV_CUDAFEATURES2D
 void GpuMatcher::match(const ImageFeatures &features1, const ImageFeatures &features2, MatchesInfo& matches_info)
 {
-    CV_INSTRUMENT_REGION()
+    CV_INSTRUMENT_REGION();
 
     matches_info.matches.clear();
 
@@ -442,11 +442,11 @@ SurfFeaturesFinder::SurfFeaturesFinder(double hess_thresh, int num_octaves, int 
         extractor_ = sextractor_;
     }
 #else
-    (void)hess_thresh;
-    (void)num_octaves;
-    (void)num_layers;
-    (void)num_octaves_descr;
-    (void)num_layers_descr;
+    CV_UNUSED(hess_thresh);
+    CV_UNUSED(num_octaves);
+    CV_UNUSED(num_layers);
+    CV_UNUSED(num_octaves_descr);
+    CV_UNUSED(num_layers_descr);
     CV_Error( Error::StsNotImplemented, "OpenCV was built without SURF support" );
 #endif
 }
@@ -576,13 +576,13 @@ void OrbFeaturesFinder::find(InputArray image, ImageFeatures &features)
     }
 }
 
-AKAZEFeaturesFinder::AKAZEFeaturesFinder(int descriptor_type,
+AKAZEFeaturesFinder::AKAZEFeaturesFinder(AKAZE::DescriptorType descriptor_type,
                                          int descriptor_size,
                                          int descriptor_channels,
                                          float threshold,
                                          int nOctaves,
                                          int nOctaveLayers,
-                                         int diffusivity)
+                                         KAZE::DiffusivityType diffusivity)
 {
     akaze = AKAZE::create(descriptor_type, descriptor_size, descriptor_channels,
                           threshold, nOctaves, nOctaveLayers, diffusivity);
@@ -700,7 +700,7 @@ void FeaturesMatcher::operator ()(const std::vector<ImageFeatures> &features, st
 
 BestOf2NearestMatcher::BestOf2NearestMatcher(bool try_use_gpu, float match_conf, int num_matches_thresh1, int num_matches_thresh2)
 {
-    (void)try_use_gpu;
+    CV_UNUSED(try_use_gpu);
 
 #ifdef HAVE_OPENCV_CUDAFEATURES2D
     if (try_use_gpu && getCudaEnabledDeviceCount() > 0)
@@ -722,7 +722,7 @@ BestOf2NearestMatcher::BestOf2NearestMatcher(bool try_use_gpu, float match_conf,
 void BestOf2NearestMatcher::match(const ImageFeatures &features1, const ImageFeatures &features2,
                                   MatchesInfo &matches_info)
 {
-    CV_INSTRUMENT_REGION()
+    CV_INSTRUMENT_REGION();
 
     (*impl_)(features1, features2, matches_info);
 

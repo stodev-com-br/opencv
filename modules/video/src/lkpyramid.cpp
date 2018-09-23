@@ -45,7 +45,9 @@
 #include "lkpyramid.hpp"
 #include "opencl_kernels_video.hpp"
 #include "opencv2/core/hal/intrin.hpp"
+#ifdef HAVE_OPENCV_CALIB3D
 #include "opencv2/calib3d.hpp"
+#endif
 
 #include "opencv2/core/openvx/ovx_defs.hpp"
 
@@ -176,7 +178,7 @@ typedef float itemtype;
 
 void cv::detail::LKTrackerInvoker::operator()(const Range& range) const
 {
-    CV_INSTRUMENT_REGION()
+    CV_INSTRUMENT_REGION();
 
     Point2f halfWin((winSize.width-1)*0.5f, (winSize.height-1)*0.5f);
     const Mat& I = *prevImg;
@@ -696,13 +698,13 @@ void cv::detail::LKTrackerInvoker::operator()(const Range& range) const
 int cv::buildOpticalFlowPyramid(InputArray _img, OutputArrayOfArrays pyramid, Size winSize, int maxLevel, bool withDerivatives,
                                 int pyrBorder, int derivBorder, bool tryReuseInputImage)
 {
-    CV_INSTRUMENT_REGION()
+    CV_INSTRUMENT_REGION();
 
     Mat img = _img.getMat();
     CV_Assert(img.depth() == CV_8U && winSize.width > 2 && winSize.height > 2 );
     int pyrstep = withDerivatives ? 2 : 1;
 
-    pyramid.create(1, (maxLevel + 1) * pyrstep, 0 /*type*/, -1, true, 0);
+    pyramid.create(1, (maxLevel + 1) * pyrstep, 0 /*type*/, -1, true);
 
     int derivType = CV_MAKETYPE(DataType<cv::detail::deriv_type>::depth, img.channels() * 2);
 
@@ -781,7 +783,7 @@ int cv::buildOpticalFlowPyramid(InputArray _img, OutputArrayOfArrays pyramid, Si
         sz = Size((sz.width+1)/2, (sz.height+1)/2);
         if( sz.width <= winSize.width || sz.height <= winSize.height )
         {
-            pyramid.create(1, (level + 1) * pyrstep, 0 /*type*/, -1, true, 0);//check this
+            pyramid.create(1, (level + 1) * pyrstep, 0 /*type*/, -1, true);//check this
             return level;
         }
 
@@ -1220,7 +1222,7 @@ void SparsePyrLKOpticalFlowImpl::calc( InputArray _prevImg, InputArray _nextImg,
                            InputArray _prevPts, InputOutputArray _nextPts,
                            OutputArray _status, OutputArray _err)
 {
-    CV_INSTRUMENT_REGION()
+    CV_INSTRUMENT_REGION();
 
     CV_OCL_RUN(ocl::isOpenCLActivated() &&
                (_prevImg.isUMat() || _nextImg.isUMat()) &&
@@ -1401,8 +1403,11 @@ void cv::calcOpticalFlowPyrLK( InputArray _prevImg, InputArray _nextImg,
 
 cv::Mat cv::estimateRigidTransform( InputArray src1, InputArray src2, bool fullAffine )
 {
-    CV_INSTRUMENT_REGION()
-
+    CV_INSTRUMENT_REGION();
+#ifndef HAVE_OPENCV_CALIB3D
+    CV_UNUSED(src1); CV_UNUSED(src2); CV_UNUSED(fullAffine);
+    CV_Error(Error::StsError, "estimateRigidTransform requires calib3d module");
+#else
     Mat A = src1.getMat(), B = src2.getMat();
 
     const int COUNT = 15;
@@ -1505,8 +1510,10 @@ cv::Mat cv::estimateRigidTransform( InputArray src1, InputArray src2, bool fullA
     if (fullAffine)
     {
         return estimateAffine2D(pA, pB);
-    } else
+    }
+    else
     {
         return estimateAffinePartial2D(pA, pB);
     }
+#endif
 }

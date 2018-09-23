@@ -37,6 +37,18 @@
 #include <algorithm>
 
 
+#ifndef OPENCV_32BIT_CONFIGURATION
+# if defined(INTPTR_MAX) && defined(INT32_MAX) && INTPTR_MAX == INT32_MAX
+#   define OPENCV_32BIT_CONFIGURATION 1
+# elif defined(_WIN32) && !defined(_WIN64)
+#   define OPENCV_32BIT_CONFIGURATION 1
+# endif
+#else
+# if OPENCV_32BIT_CONFIGURATION == 0
+#   undef OPENCV_32BIT_CONFIGURATION
+# endif
+#endif
+
 #ifdef WINRT
     #pragma warning(disable:4447) // Disable warning 'main' signature found without threading model
 #endif
@@ -172,7 +184,7 @@ double getMaxVal(int depth);
 
 Size randomSize(RNG& rng, double maxSizeLog);
 void randomSize(RNG& rng, int minDims, int maxDims, double maxSizeLog, vector<int>& sz);
-int randomType(RNG& rng, int typeMask, int minChannels, int maxChannels);
+int randomType(RNG& rng, cv::_OutputArray::DepthMask typeMask, int minChannels, int maxChannels);
 Mat randomMat(RNG& rng, Size size, int type, double minVal, double maxVal, bool useRoi);
 Mat randomMat(RNG& rng, const vector<int>& size, int type, double minVal, double maxVal, bool useRoi);
 void add(const Mat& a, double alpha, const Mat& b, double beta,
