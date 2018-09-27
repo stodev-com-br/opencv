@@ -88,7 +88,7 @@ public:
             {
                 CV_Error(Error::StsBadArg,
                          format("Orders of dimensions in Permute layer parameter"
-                                "must be in [0...%d]", _numAxes - 1));
+                                "must be in [0...%zu]", _numAxes - 1));
             }
             if (std::find(_order.begin(), _order.end(), currentOrder) != _order.end())
             {
@@ -383,9 +383,9 @@ public:
         std::shared_ptr<InferenceEngine::CNNLayer> ieLayer(new InferenceEngine::CNNLayer(lp));
 
         CV_Assert(!_order.empty());
-        ieLayer->params["order"] = format("%d", _order[0]);
+        ieLayer->params["order"] = format("%zu", _order[0]);
         for (int i = 1; i < _order.size(); ++i)
-            ieLayer->params["order"] += format(",%d", _order[i]);
+            ieLayer->params["order"] += format(",%zu", _order[i]);
 
         return Ptr<BackendNode>(new InfEngineBackendNode(ieLayer));
 #endif  // HAVE_INF_ENGINE
