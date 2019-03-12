@@ -5,6 +5,8 @@
 // Copyright (C) 2018 Intel Corporation
 
 
+#include "precomp.hpp"
+
 #include <ade/graph.hpp>
 
 #include "opencv2/gapi/gproto.hpp" // descr_of
@@ -57,6 +59,19 @@ void cv::GCompiled::Priv::checkArgs(const cv::gimpl::GRuntimeArgs &args) const
     }
 }
 
+bool cv::GCompiled::Priv::canReshape() const
+{
+    GAPI_Assert(m_exec);
+    return m_exec->canReshape();
+}
+
+void cv::GCompiled::Priv::reshape(const GMetaArgs& inMetas, const GCompileArgs& args)
+{
+    GAPI_Assert(m_exec);
+    m_exec->reshape(inMetas, args);
+    m_metas = inMetas;
+}
+
 const cv::gimpl::GModel::Graph& cv::GCompiled::Priv::model() const
 {
     GAPI_Assert(nullptr != m_exec);
@@ -80,6 +95,7 @@ void cv::GCompiled::operator() (GRunArgs &&ins, GRunArgsP &&outs)
     m_priv->run(cv::gimpl::GRuntimeArgs{std::move(ins),std::move(outs)});
 }
 
+#if !defined(GAPI_STANDALONE)
 void cv::GCompiled::operator ()(cv::Mat in, cv::Mat &out)
 {
     (*this)(cv::gin(in), cv::gout(out));
@@ -113,6 +129,7 @@ void cv::GCompiled::operator ()(const std::vector<cv::Mat> &ins,
 
     (*this)(std::move(call_ins), std::move(call_outs));
 }
+#endif // !defined(GAPI_STANDALONE)
 
 const cv::GMetaArgs& cv::GCompiled::metas() const
 {
@@ -124,8 +141,17 @@ const cv::GMetaArgs& cv::GCompiled::outMetas() const
     return m_priv->outMetas();
 }
 
-
 cv::GCompiled::Priv& cv::GCompiled::priv()
 {
     return *m_priv;
+}
+
+bool cv::GCompiled::canReshape() const
+{
+    return m_priv->canReshape();
+}
+
+void cv::GCompiled::reshape(const GMetaArgs& inMetas, const GCompileArgs& args)
+{
+    m_priv->reshape(inMetas, args);
 }

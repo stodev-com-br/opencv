@@ -44,6 +44,7 @@
 #include "layers_common.hpp"
 #include "../op_halide.hpp"
 #include "../op_inf_engine.hpp"
+#include "../op_vkcom.hpp"
 #include <algorithm>
 #include <stdlib.h>
 using std::max;
@@ -89,8 +90,9 @@ public:
     virtual bool supportBackend(int backendId) CV_OVERRIDE
     {
         return backendId == DNN_BACKEND_OPENCV ||
-               backendId == DNN_BACKEND_HALIDE && haveHalide() && axisRaw == 1 ||
-               backendId == DNN_BACKEND_INFERENCE_ENGINE && haveInfEngine() && !logSoftMax;
+               (backendId == DNN_BACKEND_HALIDE && haveHalide() && axisRaw == 1) ||
+               (backendId == DNN_BACKEND_INFERENCE_ENGINE && haveInfEngine() && !logSoftMax) ||
+               (backendId == DNN_BACKEND_VKCOM && haveVulkan());
     }
 
 #ifdef HAVE_OPENCL
@@ -187,8 +189,7 @@ public:
         CV_TRACE_FUNCTION();
         CV_TRACE_ARG_VALUE(name, "name", name.c_str());
 
-        CV_OCL_RUN(IS_DNN_OPENCL_TARGET(preferableTarget) &&
-                   OCL_PERFORMANCE_CHECK(ocl::Device::getDefault().isIntel()),
+        CV_OCL_RUN(IS_DNN_OPENCL_TARGET(preferableTarget),
                    forward_ocl(inputs_arr, outputs_arr, internals_arr))
 
         if (inputs_arr.depth() == CV_16S)
@@ -285,6 +286,18 @@ public:
         }
     }
 
+    virtual Ptr<BackendNode> initVkCom(const std::vector<Ptr<BackendWrapper> > &inputs) CV_OVERRIDE
+    {
+#ifdef HAVE_VULKAN
+        vkcom::Tensor in = VkComTensor(inputs[0]);
+        int cAxis = clamp(axisRaw, in.dimNum());
+        std::shared_ptr<vkcom::OpBase> op(new vkcom::OpSoftmax(cAxis, logSoftMax));
+        return Ptr<BackendNode>(new VkComBackendNode(inputs, op));
+#endif  // HAVE_VULKAN
+        return Ptr<BackendNode>();
+    }
+
+
     virtual Ptr<BackendNode> initHalide(const std::vector<Ptr<BackendWrapper> > &inputs) CV_OVERRIDE
     {
 #ifdef HAVE_HALIDE
@@ -313,6 +326,13 @@ public:
     virtual Ptr<BackendNode> initInfEngine(const std::vector<Ptr<BackendWrapper> >& inputs) CV_OVERRIDE
     {
 #ifdef HAVE_INF_ENGINE
+#if INF_ENGINE_VER_MAJOR_GE(INF_ENGINE_RELEASE_2018R5)
+        InferenceEngine::DataPtr input = infEngineDataNode(inputs[0]);
+
+        InferenceEngine::Builder::SoftMaxLayer ieLayer(name);
+        ieLayer.setAxis(clamp(axisRaw, input->dims.size()));
+        return Ptr<BackendNode>(new InfEngineBackendNode(ieLayer));
+#else
         InferenceEngine::DataPtr input = infEngineDataNode(inputs[0]);
 
         InferenceEngine::LayerParams lp;
@@ -322,6 +342,7 @@ public:
         std::shared_ptr<InferenceEngine::SoftMaxLayer> ieLayer(new InferenceEngine::SoftMaxLayer(lp));
         ieLayer->axis = clamp(axisRaw, input->dims.size());
         return Ptr<BackendNode>(new InfEngineBackendNode(ieLayer));
+#endif
 #endif  // HAVE_INF_ENGINE
         return Ptr<BackendNode>();
     }

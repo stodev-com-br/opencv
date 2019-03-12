@@ -136,6 +136,8 @@ void HOGDescriptor::setSVMDetector(InputArray _svmDetector)
 
 bool HOGDescriptor::read(FileNode& obj)
 {
+    CV_Assert(!obj["winSize"].empty());
+
     if( !obj.isMap() )
         return false;
     FileNodeIterator it = obj["winSize"].begin();
@@ -216,7 +218,7 @@ void HOGDescriptor::copyTo(HOGDescriptor& c) const
     c.histogramNormType = histogramNormType;
     c.L2HysThreshold = L2HysThreshold;
     c.gammaCorrection = gammaCorrection;
-    c.svmDetector = svmDetector;
+    c.setSVMDetector(svmDetector);
     c.nlevels = nlevels;
     c.signedGradient = signedGradient;
 }
@@ -232,17 +234,21 @@ inline float32x4_t vsetq_f32(float f0, float f1, float f2, float f3)
     return a;
 }
 #endif
-void HOGDescriptor::computeGradient(const Mat& img, Mat& grad, Mat& qangle,
+void HOGDescriptor::computeGradient(InputArray _img, InputOutputArray _grad, InputOutputArray _qangle,
     Size paddingTL, Size paddingBR) const
 {
     CV_INSTRUMENT_REGION();
 
+    Mat img = _img.getMat();
+    CV_Assert(!img.empty());
     CV_Assert( img.type() == CV_8U || img.type() == CV_8UC3 );
 
     Size gradsize(img.cols + paddingTL.width + paddingBR.width,
         img.rows + paddingTL.height + paddingBR.height);
-    grad.create(gradsize, CV_32FC2);  // <magnitude*(1-alpha), magnitude*alpha>
-    qangle.create(gradsize, CV_8UC2); // [0..nbins-1] - quantized gradient orientation
+    _grad.create(gradsize, CV_32FC2);  // <magnitude*(1-alpha), magnitude*alpha>
+    _qangle.create(gradsize, CV_8UC2); // [0..nbins-1] - quantized gradient orientation
+    Mat grad = _grad.getMat();
+    Mat qangle = _qangle.getMat();
 
     Size wholeSize;
     Point roiofs;
@@ -1648,12 +1654,13 @@ void HOGDescriptor::compute(InputArray _img, std::vector<float>& descriptors,
     }
 }
 
-void HOGDescriptor::detect(const Mat& img,
+void HOGDescriptor::detect(InputArray _img,
     std::vector<Point>& hits, std::vector<double>& weights, double hitThreshold,
     Size winStride, Size padding, const std::vector<Point>& locations) const
 {
     CV_INSTRUMENT_REGION();
 
+    Mat img = _img.getMat();
     hits.clear();
     weights.clear();
     if( svmDetector.empty() )
@@ -1762,7 +1769,7 @@ void HOGDescriptor::detect(const Mat& img,
     }
 }
 
-void HOGDescriptor::detect(const Mat& img, std::vector<Point>& hits, double hitThreshold,
+void HOGDescriptor::detect(InputArray img, std::vector<Point>& hits, double hitThreshold,
     Size winStride, Size padding, const std::vector<Point>& locations) const
 {
     CV_INSTRUMENT_REGION();
@@ -2110,62 +2117,6 @@ void HOGDescriptor::detectMultiScale(InputArray img, std::vector<Rect>& foundLoc
     detectMultiScale(img, foundLocations, foundWeights, hitThreshold, winStride,
                 padding, scale0, finalThreshold, useMeanshiftGrouping);
 }
-
-template<typename _ClsName> struct RTTIImpl
-{
-public:
-    static int isInstance(const void* ptr)
-    {
-        static _ClsName dummy;
-        static void* dummyp = &dummy;
-        union
-        {
-            const void* p;
-            const void** pp;
-        } a, b;
-        a.p = dummyp;
-        b.p = ptr;
-        return *a.pp == *b.pp;
-    }
-    static void release(void** dbptr)
-    {
-        if(dbptr && *dbptr)
-        {
-            delete (_ClsName*)*dbptr;
-            *dbptr = 0;
-        }
-    }
-    static void* read(CvFileStorage* fs, CvFileNode* n)
-    {
-        FileNode fn(fs, n);
-        _ClsName* obj = new _ClsName;
-        if(obj->read(fn))
-            return obj;
-        delete obj;
-        return 0;
-    }
-
-    static void write(CvFileStorage* _fs, const char* name, const void* ptr, CvAttrList)
-    {
-        if(ptr && _fs)
-        {
-            FileStorage fs(_fs, false);
-            ((const _ClsName*)ptr)->write(fs, String(name));
-        }
-    }
-
-    static void* clone(const void* ptr)
-    {
-        if(!ptr)
-            return 0;
-        return new _ClsName(*(const _ClsName*)ptr);
-    }
-};
-
-typedef RTTIImpl<HOGDescriptor> HOGRTTI;
-
-CvType hog_type( CV_TYPE_NAME_HOG_DESCRIPTOR, HOGRTTI::isInstance,
-    HOGRTTI::release, HOGRTTI::read, HOGRTTI::write, HOGRTTI::clone);
 
 std::vector<float> HOGDescriptor::getDefaultPeopleDetector()
 {
@@ -3542,12 +3493,13 @@ public:
     Mutex* mtx;
 };
 
-void HOGDescriptor::detectROI(const cv::Mat& img, const std::vector<cv::Point> &locations,
+void HOGDescriptor::detectROI(InputArray _img, const std::vector<cv::Point> &locations,
     CV_OUT std::vector<cv::Point>& foundLocations, CV_OUT std::vector<double>& confidences,
     double hitThreshold, cv::Size winStride, cv::Size padding) const
 {
     CV_INSTRUMENT_REGION();
 
+    Mat img = _img.getMat();
     foundLocations.clear();
     confidences.clear();
 
@@ -3654,12 +3606,13 @@ void HOGDescriptor::detectROI(const cv::Mat& img, const std::vector<cv::Point> &
     }
 }
 
-void HOGDescriptor::detectMultiScaleROI(const cv::Mat& img,
+void HOGDescriptor::detectMultiScaleROI(InputArray _img,
     CV_OUT std::vector<cv::Rect>& foundLocations, std::vector<DetectionROI>& locations,
     double hitThreshold, int groupThreshold) const
 {
     CV_INSTRUMENT_REGION();
 
+    Mat img = _img.getMat();
     std::vector<Rect> allCandidates;
     Mutex mtx;
 
@@ -3670,110 +3623,6 @@ void HOGDescriptor::detectMultiScaleROI(const cv::Mat& img,
     foundLocations.resize(allCandidates.size());
     std::copy(allCandidates.begin(), allCandidates.end(), foundLocations.begin());
     cv::groupRectangles(foundLocations, groupThreshold, 0.2);
-}
-
-void HOGDescriptor::readALTModel(String modelfile)
-{
-    // read model from SVMlight format..
-    FILE *modelfl;
-    if ((modelfl = fopen(modelfile.c_str(), "rb")) == NULL)
-    {
-        String eerr("file not exist");
-        String efile(__FILE__);
-        String efunc(__FUNCTION__);
-        CV_THROW (Exception(Error::StsError, eerr, efile, efunc, __LINE__));
-    }
-    char version_buffer[10];
-    if (!fread (&version_buffer,sizeof(char),10,modelfl))
-    {
-        String eerr("version?");
-        String efile(__FILE__);
-        String efunc(__FUNCTION__);
-        fclose(modelfl);
-
-        CV_THROW (Exception(Error::StsError, eerr, efile, efunc, __LINE__));
-    }
-    if(strcmp(version_buffer,"V6.01")) {
-        String eerr("version does not match");
-        String efile(__FILE__);
-        String efunc(__FUNCTION__);
-        fclose(modelfl);
-
-        CV_THROW (Exception(Error::StsError, eerr, efile, efunc, __LINE__));
-    }
-    /* read version number */
-    int version = 0;
-    if (!fread (&version,sizeof(int),1,modelfl))
-    {
-        fclose(modelfl);
-        CV_THROW (Exception());
-    }
-    if (version < 200)
-    {
-        String eerr("version does not match");
-        String efile(__FILE__);
-        String efunc(__FUNCTION__);
-        fclose(modelfl);
-        CV_THROW (Exception());
-    }
-    int kernel_type;
-    size_t nread;
-    nread=fread(&(kernel_type),sizeof(int),1,modelfl);
-
-    {// ignore these
-        int poly_degree;
-        nread=fread(&(poly_degree),sizeof(int),1,modelfl);
-
-        double rbf_gamma;
-        nread=fread(&(rbf_gamma),sizeof(double), 1, modelfl);
-        double coef_lin;
-        nread=fread(&(coef_lin),sizeof(double),1,modelfl);
-        double coef_const;
-        nread=fread(&(coef_const),sizeof(double),1,modelfl);
-        int l;
-        nread=fread(&l,sizeof(int),1,modelfl);
-        CV_Assert(l >= 0 && l < 0xFFFF);
-        char* custom = new char[l];
-        nread=fread(custom,sizeof(char),l,modelfl);
-        delete[] custom;
-    }
-    int totwords;
-    nread=fread(&(totwords),sizeof(int),1,modelfl);
-    {// ignore these
-        int totdoc;
-        nread=fread(&(totdoc),sizeof(int),1,modelfl);
-        int sv_num;
-        nread=fread(&(sv_num), sizeof(int),1,modelfl);
-    }
-
-    double linearbias;
-    nread=fread(&linearbias, sizeof(double), 1, modelfl);
-
-    std::vector<float> detector;
-    detector.clear();
-    if(kernel_type == 0) { /* linear kernel */
-        /* save linear wts also */
-        CV_Assert(totwords + 1 > 0 && totwords < 0xFFFF);
-        double *linearwt = new double[totwords+1];
-        int length = totwords;
-        nread = fread(linearwt, sizeof(double), totwords + 1, modelfl);
-        if(nread != static_cast<size_t>(length) + 1) {
-            delete [] linearwt;
-            fclose(modelfl);
-            CV_THROW (Exception());
-        }
-
-        for(int i = 0; i < length; i++)
-            detector.push_back((float)linearwt[i]);
-
-        detector.push_back((float)-linearbias);
-        setSVMDetector(detector);
-        delete [] linearwt;
-    } else {
-        fclose(modelfl);
-        CV_THROW (Exception());
-    }
-    fclose(modelfl);
 }
 
 void HOGDescriptor::groupRectangles(std::vector<cv::Rect>& rectList, std::vector<double>& weights, int groupThreshold, double eps) const

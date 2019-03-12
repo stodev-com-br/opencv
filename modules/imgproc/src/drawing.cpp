@@ -160,21 +160,21 @@ bool clipLine( Rect img_rect, Point& pt1, Point& pt2 )
    Initializes line iterator.
    Returns number of points on the line or negative number if error.
 */
-LineIterator::LineIterator(const Mat& img, Point pt1, Point pt2,
-                           int connectivity, bool left_to_right)
+void LineIterator::init(const Size& size, int type, uchar* data, size_t dataStep, Point pt1, Point pt2,
+                        int connectivity, bool left_to_right)
 {
     count = -1;
 
     CV_Assert( connectivity == 8 || connectivity == 4 );
 
-    if( (unsigned)pt1.x >= (unsigned)(img.cols) ||
-        (unsigned)pt2.x >= (unsigned)(img.cols) ||
-        (unsigned)pt1.y >= (unsigned)(img.rows) ||
-        (unsigned)pt2.y >= (unsigned)(img.rows) )
+    if( (unsigned)pt1.x >= (unsigned)(size.width) ||
+        (unsigned)pt2.x >= (unsigned)(size.width) ||
+        (unsigned)pt1.y >= (unsigned)(size.height) ||
+        (unsigned)pt2.y >= (unsigned)(size.height) )
     {
-        if( !clipLine( img.size(), pt1, pt2 ) )
+        if( !clipLine( size, pt1, pt2 ) )
         {
-            ptr = img.data;
+            ptr = data;
             err = plusDelta = minusDelta = plusStep = minusStep = count = 0;
             ptr0 = 0;
             step = 0;
@@ -183,8 +183,8 @@ LineIterator::LineIterator(const Mat& img, Point pt1, Point pt2,
         }
     }
 
-    size_t bt_pix0 = img.elemSize(), bt_pix = bt_pix0;
-    size_t istep = img.step;
+    size_t bt_pix0 = CV_ELEM_SIZE(type), bt_pix = bt_pix0;
+    size_t istep = dataStep;
 
     int dx = pt2.x - pt1.x;
     int dy = pt2.y - pt1.y;
@@ -203,7 +203,7 @@ LineIterator::LineIterator(const Mat& img, Point pt1, Point pt2,
         bt_pix = (bt_pix ^ s) - s;
     }
 
-    ptr = (uchar*)(img.data + pt1.y * istep + pt1.x * bt_pix0);
+    ptr = (uchar*)(data + pt1.y * istep + pt1.x * bt_pix0);//when no Mat is attached, ptr is just a dummy address and should not be dereferenced
 
     s = dy < 0 ? -1 : 0;
     dy = (dy ^ s) - s;
@@ -243,8 +243,8 @@ LineIterator::LineIterator(const Mat& img, Point pt1, Point pt2,
         count = dx + dy + 1;
     }
 
-    this->ptr0 = img.ptr();
-    this->step = (int)img.step;
+    this->ptr0 = data;
+    this->step = static_cast<int>(dataStep);
     this->elemSize = (int)bt_pix0;
 }
 
@@ -1875,7 +1875,7 @@ void rectangle( InputOutputArray img, Rect rec,
 {
     CV_INSTRUMENT_REGION();
 
-    if( rec.area() > 0 )
+    if( !rec.empty() )
         rectangle( img, rec.tl(), rec.br() - Point(1<<shift,1<<shift),
                    color, thickness, lineType, shift );
 }
@@ -1971,10 +1971,12 @@ void ellipse(InputOutputArray _img, const RotatedRect& box, const Scalar& color,
     EllipseEx( img, center, axes, _angle, 0, 360, buf, thickness, lineType );
 }
 
-void fillConvexPoly( Mat& img, const Point* pts, int npts,
+void fillConvexPoly( InputOutputArray _img, const Point* pts, int npts,
                      const Scalar& color, int line_type, int shift )
 {
     CV_INSTRUMENT_REGION();
+
+    Mat img = _img.getMat();
 
     if( !pts || npts <= 0 )
         return;
@@ -1989,12 +1991,13 @@ void fillConvexPoly( Mat& img, const Point* pts, int npts,
     FillConvexPoly( img, _pts.data(), npts, buf, line_type, shift );
 }
 
-
-void fillPoly( Mat& img, const Point** pts, const int* npts, int ncontours,
+void fillPoly( InputOutputArray _img, const Point** pts, const int* npts, int ncontours,
                const Scalar& color, int line_type,
                int shift, Point offset )
 {
     CV_INSTRUMENT_REGION();
+
+    Mat img = _img.getMat();
 
     if( line_type == CV_AA && img.depth() != CV_8U )
         line_type = 8;
@@ -2020,11 +2023,12 @@ void fillPoly( Mat& img, const Point** pts, const int* npts, int ncontours,
     FillEdgeCollection(img, edges, buf);
 }
 
-
-void polylines( Mat& img, const Point* const* pts, const int* npts, int ncontours, bool isClosed,
+void polylines( InputOutputArray _img, const Point* const* pts, const int* npts, int ncontours, bool isClosed,
                 const Scalar& color, int thickness, int line_type, int shift )
 {
     CV_INSTRUMENT_REGION();
+
+    Mat img = _img.getMat();
 
     if( line_type == CV_AA && img.depth() != CV_8U )
         line_type = 8;
@@ -2370,24 +2374,21 @@ double getFontScaleFromHeight(const int fontFace, const int pixelHeight, const i
 
 }
 
-
-void cv::fillConvexPoly(InputOutputArray _img, InputArray _points,
+void cv::fillConvexPoly(InputOutputArray img, InputArray _points,
                         const Scalar& color, int lineType, int shift)
 {
     CV_INSTRUMENT_REGION();
 
-    Mat img = _img.getMat(), points = _points.getMat();
+    Mat points = _points.getMat();
     CV_Assert(points.checkVector(2, CV_32S) >= 0);
     fillConvexPoly(img, points.ptr<Point>(), points.rows*points.cols*points.channels()/2, color, lineType, shift);
 }
 
-
-void cv::fillPoly(InputOutputArray _img, InputArrayOfArrays pts,
+void cv::fillPoly(InputOutputArray img, InputArrayOfArrays pts,
                   const Scalar& color, int lineType, int shift, Point offset)
 {
     CV_INSTRUMENT_REGION();
 
-    Mat img = _img.getMat();
     int i, ncontours = (int)pts.total();
     if( ncontours == 0 )
         return;
@@ -2406,14 +2407,12 @@ void cv::fillPoly(InputOutputArray _img, InputArrayOfArrays pts,
     fillPoly(img, (const Point**)ptsptr, npts, (int)ncontours, color, lineType, shift, offset);
 }
 
-
-void cv::polylines(InputOutputArray _img, InputArrayOfArrays pts,
+void cv::polylines(InputOutputArray img, InputArrayOfArrays pts,
                    bool isClosed, const Scalar& color,
-                   int thickness, int lineType, int shift )
+                   int thickness, int lineType, int shift)
 {
     CV_INSTRUMENT_REGION();
 
-    Mat img = _img.getMat();
     bool manyContours = pts.kind() == _InputArray::STD_VECTOR_VECTOR ||
                         pts.kind() == _InputArray::STD_VECTOR_MAT;
     int i, ncontours = manyContours ? (int)pts.total() : 1;

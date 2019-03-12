@@ -409,6 +409,8 @@ bool CV_ChessboardDetectorTest::checkByGenerator()
     int progress = 0;
     for(int i = 0; i < test_num; ++i)
     {
+        SCOPED_TRACE(cv::format("test_num=%d", test_num));
+
         progress = update_progress( progress, i, test_num, 0 );
         ChessBoardGenerator cbg(sizes[i % sizes_num]);
 
@@ -439,13 +441,17 @@ bool CV_ChessboardDetectorTest::checkByGenerator()
         }
 
         double err = calcErrorMinError(cbg.cornersSize(), corners_found, corners_generated);
-        if( err > rough_success_error_level )
+        EXPECT_LE(err, rough_success_error_level) << "bad accuracy of corner guesses";
+#if 0
+        if (err >= rough_success_error_level)
         {
-            ts->printf( cvtest::TS::LOG, "bad accuracy of corner guesses" );
-            ts->set_failed_test_info( cvtest::TS::FAIL_BAD_ACCURACY );
-            res = false;
-            return res;
+            imshow("cb", cb);
+            Mat cb_corners = cb.clone();
+            cv::drawChessboardCorners(cb_corners, cbg.cornersSize(), Mat(corners_found), found);
+            imshow("corners", cb_corners);
+            waitKey(0);
         }
+#endif
     }
 
     /* ***** negative ***** */
@@ -617,6 +623,25 @@ TEST(Calib3d_AsymmetricCirclesPatternDetector, accuracy) { CV_ChessboardDetector
 #ifdef HAVE_OPENCV_FLANN
 TEST(Calib3d_AsymmetricCirclesPatternDetectorWithClustering, accuracy) { CV_ChessboardDetectorTest test( ASYMMETRIC_CIRCLES_GRID, CALIB_CB_CLUSTERING ); test.safe_run(); }
 #endif
+
+TEST(Calib3d_CirclesPatternDetectorWithClustering, accuracy)
+{
+    cv::String dataDir = string(TS::ptr()->get_data_path()) + "cv/cameracalibration/circles/";
+
+    cv::Mat expected;
+    FileStorage fs(dataDir + "circles_corners15.dat", FileStorage::READ);
+    fs["corners"] >> expected;
+    fs.release();
+
+    cv::Mat image = cv::imread(dataDir + "circles15.png");
+
+    std::vector<Point2f> centers;
+    cv::findCirclesGrid(image, Size(10, 8), centers, CALIB_CB_SYMMETRIC_GRID | CALIB_CB_CLUSTERING);
+    ASSERT_EQ(expected.total(), centers.size());
+
+    double error = calcError(centers, expected);
+    ASSERT_LE(error, precise_success_error_level);
+}
 
 }} // namespace
 /* End of file. */

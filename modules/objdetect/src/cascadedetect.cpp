@@ -44,7 +44,6 @@
 #include <iostream>
 
 #include "cascadedetect.hpp"
-#include "opencv2/objdetect/objdetect_c.h"
 #include "opencl_kernels_objdetect.hpp"
 
 namespace cv
@@ -502,7 +501,7 @@ bool FeatureEvaluator::setImage( InputArray _image, const std::vector<float>& _s
         copyVectorToUMat(*scaleData, uscaleData);
     }
 
-    if (_image.isUMat() && localSize.area() > 0)
+    if (_image.isUMat() && !localSize.empty())
     {
         usbuf.create(sbufSize.height*nchannels, sbufSize.width, CV_32S);
         urbuf.create(sz0, CV_8U);
@@ -913,13 +912,23 @@ bool CascadeClassifierImpl::load(const String& filename)
     if( !fs.isOpened() )
         return false;
 
-    if( read_(fs.getFirstTopLevelNode()) )
+    FileNode fs_root = fs.getFirstTopLevelNode();
+
+    if( read_(fs_root) )
         return true;
 
-    fs.release();
+    // probably, it's the cascade in the old format;
+    // let's try to convert it to the new format
+    FileStorage newfs(".yml", FileStorage::WRITE+FileStorage::MEMORY);
+    haar_cvt::convert(fs_root, newfs);
+    std::string newfs_content = newfs.releaseAndGetString();
+    newfs.open(newfs_content, FileStorage::READ+FileStorage::MEMORY);
+    fs_root = newfs.getFirstTopLevelNode();
 
-    oldCascade.reset((CvHaarClassifierCascade*)cvLoad(filename.c_str(), 0, 0, 0));
-    return !oldCascade.empty();
+    if( read_(fs_root) )
+        return true;
+
+    return false;
 }
 
 void CascadeClassifierImpl::read(const FileNode& node)
@@ -1061,9 +1070,6 @@ public:
 };
 
 
-struct getRect { Rect operator ()(const CvAvgComp& e) const { return e.rect; } };
-struct getNeighbors { int operator ()(const CvAvgComp& e) const { return e.neighbors; } };
-
 #ifdef HAVE_OPENCL
 bool CascadeClassifierImpl::ocl_detectMultiScaleNoGrouping( const std::vector<float>& scales,
                                                             std::vector<Rect>& candidates )
@@ -1072,7 +1078,7 @@ bool CascadeClassifierImpl::ocl_detectMultiScaleNoGrouping( const std::vector<fl
     std::vector<UMat> bufs;
     featureEvaluator->getUMats(bufs);
     Size localsz = featureEvaluator->getLocalSize();
-    if( localsz.area() == 0 )
+    if( localsz.empty() )
         return false;
     Size lbufSize = featureEvaluator->getLocalBufSize();
     size_t localsize[] = { (size_t)localsz.width, (size_t)localsz.height };
@@ -1108,7 +1114,7 @@ bool CascadeClassifierImpl::ocl_detectMultiScaleNoGrouping( const std::vector<fl
         if( haarKernel.empty() )
         {
             String opts;
-            if (lbufSize.area())
+            if ( !lbufSize.empty() )
                 opts = format("-D LOCAL_SIZE_X=%d -D LOCAL_SIZE_Y=%d -D SUM_BUF_SIZE=%d -D SUM_BUF_STEP=%d -D NODE_COUNT=%d -D SPLIT_STAGE=%d -D N_STAGES=%d -D MAX_FACES=%d -D HAAR",
                               localsz.width, localsz.height, lbufSize.area(), lbufSize.width, data.maxNodesPerTree, splitstage_ocl, nstages, MAX_FACES);
             else
@@ -1148,7 +1154,7 @@ bool CascadeClassifierImpl::ocl_detectMultiScaleNoGrouping( const std::vector<fl
         if( lbpKernel.empty() )
         {
             String opts;
-            if (lbufSize.area())
+            if ( !lbufSize.empty() )
                 opts = format("-D LOCAL_SIZE_X=%d -D LOCAL_SIZE_Y=%d -D SUM_BUF_SIZE=%d -D SUM_BUF_STEP=%d -D SPLIT_STAGE=%d -D N_STAGES=%d -D MAX_FACES=%d -D LBP",
                               localsz.width, localsz.height, lbufSize.area(), lbufSize.width, splitstage_ocl, nstages, MAX_FACES);
             else
@@ -1215,24 +1221,6 @@ Size CascadeClassifierImpl::getOriginalWindowSize() const
 void* CascadeClassifierImpl::getOldCascade()
 {
     return oldCascade;
-}
-
-static void detectMultiScaleOldFormat( const Mat& image, Ptr<CvHaarClassifierCascade> oldCascade,
-                                       std::vector<Rect>& objects,
-                                       std::vector<int>& rejectLevels,
-                                       std::vector<double>& levelWeights,
-                                       std::vector<CvAvgComp>& vecAvgComp,
-                                       double scaleFactor, int minNeighbors,
-                                       int flags, Size minObjectSize, Size maxObjectSize,
-                                       bool outputRejectLevels = false )
-{
-    MemStorage storage(cvCreateMemStorage(0));
-    CvMat _image = cvMat(image);
-    CvSeq* _objects = cvHaarDetectObjectsForROC( &_image, oldCascade, storage, rejectLevels, levelWeights, scaleFactor,
-                                                 minNeighbors, flags, cvSize(minObjectSize), cvSize(maxObjectSize), outputRejectLevels );
-    Seq<CvAvgComp>(_objects).copyTo(vecAvgComp);
-    objects.resize(vecAvgComp.size());
-    std::transform(vecAvgComp.begin(), vecAvgComp.end(), objects.begin(), getRect());
 }
 
 void CascadeClassifierImpl::detectMultiScaleNoGrouping( InputArray _image, std::vector<Rect>& candidates,
@@ -1304,7 +1292,7 @@ void CascadeClassifierImpl::detectMultiScaleNoGrouping( InputArray _image, std::
 #ifdef HAVE_OPENCL
     bool use_ocl = tryOpenCL && ocl::isOpenCLActivated() &&
          OCL_FORCE_CHECK(_image.isUMat()) &&
-         featureEvaluator->getLocalSize().area() > 0 &&
+         !featureEvaluator->getLocalSize().empty() &&
          (data.minNodesPerTree == data.maxNodesPerTree) &&
          !isOldFormatCascade() &&
          maskGenerator.empty() &&
@@ -1364,7 +1352,7 @@ void CascadeClassifierImpl::detectMultiScale( InputArray _image, std::vector<Rec
                                           std::vector<int>& rejectLevels,
                                           std::vector<double>& levelWeights,
                                           double scaleFactor, int minNeighbors,
-                                          int flags, Size minObjectSize, Size maxObjectSize,
+                                          int /*flags*/, Size minObjectSize, Size maxObjectSize,
                                           bool outputRejectLevels )
 {
     CV_INSTRUMENT_REGION();
@@ -1374,26 +1362,16 @@ void CascadeClassifierImpl::detectMultiScale( InputArray _image, std::vector<Rec
     if( empty() )
         return;
 
-    if( isOldFormatCascade() )
+    detectMultiScaleNoGrouping( _image, objects, rejectLevels, levelWeights, scaleFactor, minObjectSize, maxObjectSize,
+                                outputRejectLevels );
+    const double GROUP_EPS = 0.2;
+    if( outputRejectLevels )
     {
-        Mat image = _image.getMat();
-        std::vector<CvAvgComp> fakeVecAvgComp;
-        detectMultiScaleOldFormat( image, oldCascade, objects, rejectLevels, levelWeights, fakeVecAvgComp, scaleFactor,
-                                   minNeighbors, flags, minObjectSize, maxObjectSize, outputRejectLevels );
+        groupRectangles( objects, rejectLevels, levelWeights, minNeighbors, GROUP_EPS );
     }
     else
     {
-        detectMultiScaleNoGrouping( _image, objects, rejectLevels, levelWeights, scaleFactor, minObjectSize, maxObjectSize,
-                                    outputRejectLevels );
-        const double GROUP_EPS = 0.2;
-        if( outputRejectLevels )
-        {
-            groupRectangles( objects, rejectLevels, levelWeights, minNeighbors, GROUP_EPS );
-        }
-        else
-        {
-            groupRectangles( objects, minNeighbors, GROUP_EPS );
-        }
+        groupRectangles( objects, minNeighbors, GROUP_EPS );
     }
 }
 
@@ -1411,7 +1389,7 @@ void CascadeClassifierImpl::detectMultiScale( InputArray _image, std::vector<Rec
 
 void CascadeClassifierImpl::detectMultiScale( InputArray _image, std::vector<Rect>& objects,
                                           std::vector<int>& numDetections, double scaleFactor,
-                                          int minNeighbors, int flags, Size minObjectSize,
+                                          int minNeighbors, int /*flags*/, Size minObjectSize,
                                           Size maxObjectSize )
 {
     CV_INSTRUMENT_REGION();
@@ -1424,20 +1402,10 @@ void CascadeClassifierImpl::detectMultiScale( InputArray _image, std::vector<Rec
 
     std::vector<int> fakeLevels;
     std::vector<double> fakeWeights;
-    if( isOldFormatCascade() )
-    {
-        std::vector<CvAvgComp> vecAvgComp;
-        detectMultiScaleOldFormat( image, oldCascade, objects, fakeLevels, fakeWeights, vecAvgComp, scaleFactor,
-                                   minNeighbors, flags, minObjectSize, maxObjectSize );
-        numDetections.resize(vecAvgComp.size());
-        std::transform(vecAvgComp.begin(), vecAvgComp.end(), numDetections.begin(), getNeighbors());
-    }
-    else
-    {
-        detectMultiScaleNoGrouping( image, objects, fakeLevels, fakeWeights, scaleFactor, minObjectSize, maxObjectSize );
-        const double GROUP_EPS = 0.2;
-        groupRectangles( objects, numDetections, minNeighbors, GROUP_EPS );
-    }
+
+    detectMultiScaleNoGrouping( image, objects, fakeLevels, fakeWeights, scaleFactor, minObjectSize, maxObjectSize );
+    const double GROUP_EPS = 0.2;
+    groupRectangles( objects, numDetections, minNeighbors, GROUP_EPS );
 }
 
 
@@ -1602,9 +1570,6 @@ bool CascadeClassifierImpl::read_(const FileNode& root)
 
     return featureEvaluator->read(fn, data.origWinSize);
 }
-
-void DefaultDeleter<CvHaarClassifierCascade>::operator ()(CvHaarClassifierCascade* obj) const { cvReleaseHaarClassifierCascade(&obj); }
-
 
 BaseCascadeClassifier::~BaseCascadeClassifier()
 {

@@ -179,7 +179,7 @@ public:
         _backgroundLabelId = getParameter<int>(params, "background_label_id");
         _varianceEncodedInTarget = getParameter<bool>(params, "variance_encoded_in_target", 0, false, false);
         _keepTopK = getParameter<int>(params, "keep_top_k");
-        _confidenceThreshold = getParameter<float>(params, "confidence_threshold", 0, false, -FLT_MAX);
+        _confidenceThreshold = getParameter<float>(params, "confidence_threshold", 0, false, 0);
         _topK = getParameter<int>(params, "top_k", 0, false, -1);
         _locPredTransposed = getParameter<bool>(params, "loc_pred_transposed", 0, false, false);
         _bboxesNormalized = getParameter<bool>(params, "normalized_bbox", 0, false, true);
@@ -198,7 +198,7 @@ public:
     virtual bool supportBackend(int backendId) CV_OVERRIDE
     {
         return backendId == DNN_BACKEND_OPENCV ||
-               backendId == DNN_BACKEND_INFERENCE_ENGINE && !_locPredTransposed && _bboxesNormalized && !_clip;
+               (backendId == DNN_BACKEND_INFERENCE_ENGINE && !_locPredTransposed && _bboxesNormalized && !_clip);
     }
 
     bool getMemoryShapes(const std::vector<MatShape> &inputs,
@@ -415,8 +415,7 @@ public:
 
         if (_bboxesNormalized)
         {
-            CV_OCL_RUN(IS_DNN_OPENCL_TARGET(preferableTarget) &&
-                       OCL_PERFORMANCE_CHECK(ocl::Device::getDefault().isIntel()),
+            CV_OCL_RUN(IS_DNN_OPENCL_TARGET(preferableTarget),
                        forward_ocl(inputs_arr, outputs_arr, internals_arr))
         }
         if (inputs_arr.depth() == CV_16S)
@@ -940,6 +939,25 @@ public:
     virtual Ptr<BackendNode> initInfEngine(const std::vector<Ptr<BackendWrapper> >&) CV_OVERRIDE
     {
 #ifdef HAVE_INF_ENGINE
+#if INF_ENGINE_VER_MAJOR_GE(INF_ENGINE_RELEASE_2018R5)
+        InferenceEngine::Builder::DetectionOutputLayer ieLayer(name);
+
+        ieLayer.setNumClasses(_numClasses);
+        ieLayer.setShareLocation(_shareLocation);
+        ieLayer.setBackgroudLabelId(_backgroundLabelId);
+        ieLayer.setNMSThreshold(_nmsThreshold);
+        ieLayer.setTopK(_topK);
+        ieLayer.setKeepTopK(_keepTopK);
+        ieLayer.setConfidenceThreshold(_confidenceThreshold);
+        ieLayer.setVariantEncodedInTarget(_varianceEncodedInTarget);
+        ieLayer.setCodeType("caffe.PriorBoxParameter." + _codeType);
+        ieLayer.setInputPorts(std::vector<InferenceEngine::Port>(3));
+
+        InferenceEngine::Builder::Layer l = ieLayer;
+        l.getParameters()["eta"] = std::string("1.0");
+
+        return Ptr<BackendNode>(new InfEngineBackendNode(l));
+#else
         InferenceEngine::LayerParams lp;
         lp.name = name;
         lp.type = "DetectionOutput";
@@ -957,6 +975,7 @@ public:
         ieLayer->params["variance_encoded_in_target"] = _varianceEncodedInTarget ? "1" : "0";
         ieLayer->params["code_type"] = "caffe.PriorBoxParameter." + _codeType;
         return Ptr<BackendNode>(new InfEngineBackendNode(ieLayer));
+#endif
 #endif  // HAVE_INF_ENGINE
         return Ptr<BackendNode>();
     }

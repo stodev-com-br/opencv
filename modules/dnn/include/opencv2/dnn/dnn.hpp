@@ -69,7 +69,8 @@ CV__DNN_INLINE_NS_BEGIN
         DNN_BACKEND_DEFAULT,
         DNN_BACKEND_HALIDE,
         DNN_BACKEND_INFERENCE_ENGINE,
-        DNN_BACKEND_OPENCV
+        DNN_BACKEND_OPENCV,
+        DNN_BACKEND_VKCOM
     };
 
     /**
@@ -81,8 +82,14 @@ CV__DNN_INLINE_NS_BEGIN
         DNN_TARGET_CPU,
         DNN_TARGET_OPENCL,
         DNN_TARGET_OPENCL_FP16,
-        DNN_TARGET_MYRIAD
+        DNN_TARGET_MYRIAD,
+        DNN_TARGET_VULKAN,
+        //! FPGA device with CPU fallbacks using Inference Engine's Heterogeneous plugin.
+        DNN_TARGET_FPGA
     };
+
+    CV_EXPORTS std::vector< std::pair<Backend, Target> > getAvailableBackends();
+    CV_EXPORTS std::vector<Target> getAvailableTargets(Backend be);
 
     /** @brief This class provides all data needed to initialize layer.
      *
@@ -179,7 +186,8 @@ CV__DNN_INLINE_NS_BEGIN
          * If this method is called after network has allocated all memory for input and output blobs
          * and before inferencing.
          */
-        CV_DEPRECATED virtual void finalize(const std::vector<Mat*> &input, std::vector<Mat> &output);
+        CV_DEPRECATED_EXTERNAL
+        virtual void finalize(const std::vector<Mat*> &input, std::vector<Mat> &output);
 
         /** @brief Computes and sets internal parameters according to inputs, outputs and blobs.
          *  @param[in]  inputs  vector of already allocated input blobs
@@ -196,7 +204,8 @@ CV__DNN_INLINE_NS_BEGIN
          *  @param[out] output allocated output blobs, which will store results of the computation.
          *  @param[out] internals allocated internal blobs
          */
-        CV_DEPRECATED virtual void forward(std::vector<Mat*> &input, std::vector<Mat> &output, std::vector<Mat> &internals);
+        CV_DEPRECATED_EXTERNAL
+        virtual void forward(std::vector<Mat*> &input, std::vector<Mat> &output, std::vector<Mat> &internals);
 
         /** @brief Given the @p input blobs, computes the output @p blobs.
          *  @param[in]  inputs  the input blobs.
@@ -216,7 +225,8 @@ CV__DNN_INLINE_NS_BEGIN
          * @overload
          * @deprecated Use Layer::finalize(InputArrayOfArrays, OutputArrayOfArrays) instead
          */
-        CV_DEPRECATED void finalize(const std::vector<Mat> &inputs, CV_OUT std::vector<Mat> &outputs);
+        CV_DEPRECATED_EXTERNAL
+        void finalize(const std::vector<Mat> &inputs, CV_OUT std::vector<Mat> &outputs);
 
         /** @brief
          * @overload
@@ -263,6 +273,7 @@ CV__DNN_INLINE_NS_BEGIN
 
         virtual Ptr<BackendNode> initInfEngine(const std::vector<Ptr<BackendWrapper> > &inputs);
 
+        virtual Ptr<BackendNode> initVkCom(const std::vector<Ptr<BackendWrapper> > &inputs);
        /**
         * @brief Automatic Halide scheduling based on layer hyper-parameters.
         * @param[in] node Backend node with Halide functions.
@@ -491,6 +502,7 @@ CV__DNN_INLINE_NS_BEGIN
          * | DNN_TARGET_OPENCL      |                  + |                            + |                  + |
          * | DNN_TARGET_OPENCL_FP16 |                  + |                            + |                    |
          * | DNN_TARGET_MYRIAD      |                    |                            + |                    |
+         * | DNN_TARGET_FPGA        |                    |                            + |                    |
          */
         CV_WRAP void setPreferableTarget(int targetId);
 
@@ -528,6 +540,11 @@ CV__DNN_INLINE_NS_BEGIN
         /** @brief Returns indexes of layers with unconnected outputs.
          */
         CV_WRAP std::vector<int> getUnconnectedOutLayers() const;
+
+        /** @brief Returns names of layers with unconnected outputs.
+         */
+        CV_WRAP std::vector<String> getUnconnectedOutLayersNames() const;
+
         /** @brief Returns input and output shapes for all layers in loaded model;
          *  preliminary inferencing isn't necessary.
          *  @param netInputShapes shapes for all input blobs in net input layer.
@@ -733,6 +750,7 @@ CV__DNN_INLINE_NS_BEGIN
      *  @brief Reads a network model stored in <a href="http://torch.ch">Torch7</a> framework's format.
      *  @param model    path to the file, dumped from Torch by using torch.save() function.
      *  @param isBinary specifies whether the network was serialized in ascii mode or binary.
+     *  @param evaluate specifies testing phase of network. If true, it's similar to evaluate() method in Torch.
      *  @returns Net object.
      *
      *  @note Ascii mode of Torch serializer is more preferable, because binary mode extensively use `long` type of C language,
@@ -754,7 +772,7 @@ CV__DNN_INLINE_NS_BEGIN
      *
      * Also some equivalents of these classes from cunn, cudnn, and fbcunn may be successfully imported.
      */
-     CV_EXPORTS_W Net readNetFromTorch(const String &model, bool isBinary = true);
+     CV_EXPORTS_W Net readNetFromTorch(const String &model, bool isBinary = true, bool evaluate = true);
 
      /**
       * @brief Read deep learning network represented in one of the supported formats.

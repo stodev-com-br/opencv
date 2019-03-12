@@ -45,13 +45,13 @@ public:
         std::vector<Mat> inputs;
         inputs_arr.getMatVector(inputs);
         hasWeights = blobs.size() == 2 || (blobs.size() == 1 && !hasBias);
-        CV_Assert(inputs.size() == 2 && blobs.empty() || blobs.size() == (int)hasWeights + (int)hasBias);
+        CV_Assert((inputs.size() == 2 && blobs.empty()) || blobs.size() == (int)hasWeights + (int)hasBias);
     }
 
     virtual bool supportBackend(int backendId) CV_OVERRIDE
     {
         return backendId == DNN_BACKEND_OPENCV || backendId == DNN_BACKEND_HALIDE ||
-               backendId == DNN_BACKEND_INFERENCE_ENGINE && axis == 1;
+               (backendId == DNN_BACKEND_INFERENCE_ENGINE && axis == 1);
     }
 
     void forward(InputArrayOfArrays inputs_arr, OutputArrayOfArrays outputs_arr, OutputArrayOfArrays internals_arr) CV_OVERRIDE
@@ -197,6 +197,29 @@ public:
     virtual Ptr<BackendNode> initInfEngine(const std::vector<Ptr<BackendWrapper> >&) CV_OVERRIDE
     {
 #ifdef HAVE_INF_ENGINE
+#if INF_ENGINE_VER_MAJOR_GE(INF_ENGINE_RELEASE_2018R5)
+        InferenceEngine::Builder::Layer l = InferenceEngine::Builder::ScaleShiftLayer(name);
+
+        CV_Assert(!blobs.empty());
+        const size_t numChannels = blobs[0].total();
+        if (hasWeights)
+        {
+            addConstantData("weights", wrapToInfEngineBlob(blobs[0], {numChannels}, InferenceEngine::Layout::C), l);
+        }
+        else
+        {
+            auto weights = InferenceEngine::make_shared_blob<float>(InferenceEngine::Precision::FP32,
+                                                                    {numChannels});
+            weights->allocate();
+
+            std::vector<float> ones(numChannels, 1);
+            weights->set(ones);
+            addConstantData("weights", weights, l);
+        }
+        if (hasBias)
+            addConstantData("biases", wrapToInfEngineBlob(blobs.back(), {numChannels}, InferenceEngine::Layout::C), l);
+        return Ptr<BackendNode>(new InfEngineBackendNode(l));
+#else
         InferenceEngine::LayerParams lp;
         lp.name = name;
         lp.type = "ScaleShift";
@@ -223,6 +246,7 @@ public:
             ieLayer->_biases = wrapToInfEngineBlob(blobs.back(), {numChannels}, InferenceEngine::Layout::C);
 
         return Ptr<BackendNode>(new InfEngineBackendNode(ieLayer));
+#endif
 #endif  // HAVE_INF_ENGINE
         return Ptr<BackendNode>();
     }

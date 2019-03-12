@@ -56,12 +56,14 @@ TEST_P(MathOpTest, MatricesAccuracyTest )
         {
             if( doReverseOp )
             {
+                in_mat1.setTo(1, in_mat1 == 0);  // avoid zeros in divide input data
                 out = cv::gapi::divRC(sc1, in1, scale, dtype);
                 cv::divide(sc, in_mat1, out_mat_ocv, scale, dtype);
                 break;
             }
             else
             {
+                sc += Scalar(1, 1, 1, 1);  // avoid zeros in divide input data
                 out = cv::gapi::divC(in1, sc1, scale, dtype);
                 cv::divide(in_mat1, sc, out_mat_ocv, scale, dtype);
                 break;
@@ -100,6 +102,7 @@ TEST_P(MathOpTest, MatricesAccuracyTest )
         }
         case (DIV):
         {
+            in_mat2.setTo(1, in_mat2 == 0);  // avoid zeros in divide input data
             out = cv::gapi::div(in1, in2, scale, dtype);
             cv::divide(in_mat1, in_mat2, out_mat_ocv, scale, dtype);
             break;
@@ -187,7 +190,7 @@ TEST_P(MulDoubleTest, AccuracyTest)
     EXPECT_EQ(out_mat_gapi.size(), sz_in);
 }
 
-TEST_P(DivTest, DivByZeroTest)
+TEST_P(DivTest, DISABLED_DivByZeroTest)  // https://github.com/opencv/opencv/pull/12826
 {
     int type = 0, dtype = 0;
     cv::Size sz_in;
@@ -217,7 +220,7 @@ TEST_P(DivTest, DivByZeroTest)
     }
 }
 
-TEST_P(DivCTest, DivByZeroTest)
+TEST_P(DivCTest, DISABLED_DivByZeroTest)  // https://github.com/opencv/opencv/pull/12826
 {
     int type = 0, dtype = 0;
     cv::Size sz_in;
@@ -678,9 +681,12 @@ TEST_P(AbsDiffCTest, AccuracyTest)
 TEST_P(SumTest, AccuracyTest)
 {
     auto param = GetParam();
+    compare_scalar_f cmpF = get<3>(GetParam());
+    MatType type = std::get<0>(param);
     cv::Size sz_in = std::get<1>(param);
-    auto compile_args = std::get<3>(param);
-    initMatrixRandU(std::get<0>(param), sz_in, std::get<2>(param));
+    auto compile_args = std::get<4>(param);
+    initMatrixRandU(type, sz_in, type, std::get<2>(param));
+
 
     cv::Scalar out_sum;
     cv::Scalar out_sum_ocv;
@@ -697,7 +703,7 @@ TEST_P(SumTest, AccuracyTest)
     }
     // Comparison //////////////////////////////////////////////////////////////
     {
-        EXPECT_EQ(out_sum[0], out_sum_ocv[0]);
+        EXPECT_TRUE(cmpF(out_sum, out_sum_ocv));
     }
 }
 
@@ -707,7 +713,8 @@ TEST_P(AddWeightedTest, AccuracyTest)
     cv::Size sz_in;
     bool initOut = false;
     cv::GCompileArgs compile_args;
-    std::tie(type, sz_in, dtype, initOut, compile_args) = GetParam();
+    compare_f cmpF;
+    std::tie(type, sz_in, dtype, initOut, cmpF, compile_args) = GetParam();
 
     auto& rng = cv::theRNG();
     double alpha = rng.uniform(0.0, 1.0);
@@ -727,52 +734,19 @@ TEST_P(AddWeightedTest, AccuracyTest)
         cv::addWeighted(in_mat1, alpha, in_mat2, beta, gamma, out_mat_ocv, dtype);
     }
     // Comparison //////////////////////////////////////////////////////////////
-    {
-        // Note, that we cannot expect bitwise results for add-weighted:
-        //
-        //    tmp = src1*alpha + src2*beta + gamma;
-        //    dst = saturate<DST>( round(tmp) );
-        //
-        // Because tmp is floating-point, dst depends on compiler optimizations
-        //
-        // However, we must expect good accuracy of tmp, and rounding correctly
+    EXPECT_TRUE(cmpF(out_mat_gapi, out_mat_ocv));
+    EXPECT_EQ(out_mat_gapi.size(), sz_in);
 
-        cv::Mat failures;
-
-        if (out_mat_ocv.type() == CV_32FC1)
-        {
-            // result: float - may vary in 7th decimal digit
-            failures = abs(out_mat_gapi - out_mat_ocv) > abs(out_mat_ocv) * 1e-6;
-        }
-        else
-        {
-            // result: integral - rounding may vary if fractional part of tmp
-            //                    is nearly 0.5
-
-            cv::Mat inexact, incorrect, diff, tmp;
-
-            inexact = out_mat_gapi != out_mat_ocv;
-
-            // even if rounded differently, check if still rounded correctly
-            cv::addWeighted(in_mat1, alpha, in_mat2, beta, gamma, tmp, CV_32F);
-            cv::subtract(out_mat_gapi, tmp, diff, cv::noArray(), CV_32F);
-            incorrect = abs(diff) >= 0.5000005f; // relative to 6 digits
-
-            failures = inexact & incorrect;
-        }
-
-        EXPECT_EQ(0, cv::countNonZero(failures));
-        EXPECT_EQ(out_mat_gapi.size(), sz_in);
-    }
 }
 
 TEST_P(NormTest, AccuracyTest)
 {
+    compare_scalar_f cmpF;
     NormTypes opType = NORM_INF;
     int type = 0;
     cv::Size sz;
     cv::GCompileArgs compile_args;
-    std::tie(opType, type, sz, compile_args) = GetParam();
+    std::tie(opType, type, sz, cmpF, compile_args) = GetParam();
     initMatrixRandU(type, sz, type, false);
 
     cv::Scalar out_norm;
@@ -794,7 +768,7 @@ TEST_P(NormTest, AccuracyTest)
 
     // Comparison //////////////////////////////////////////////////////////////
     {
-        EXPECT_EQ(out_norm[0], out_norm_ocv[0]);
+        EXPECT_TRUE(cmpF(out_norm, out_norm_ocv));
     }
 }
 
@@ -842,9 +816,8 @@ TEST_P(ThresholdTest, AccuracyTestBinary)
     int tt = std::get<2>(param);
 
     auto compile_args = std::get<4>(param);
-    auto& rng = cv::theRNG();
-    cv::Scalar thr = cv::Scalar(rng(50),rng(50),rng(50),rng(50));
-    cv::Scalar maxval = cv::Scalar(50 + rng(50),50 + rng(50),50 + rng(50),50 + rng(50));
+    cv::Scalar thr = initScalarRandU(50);
+    cv::Scalar maxval = initScalarRandU(50) + cv::Scalar(50, 50, 50, 50);
     initMatrixRandU(type, sz_in, type, std::get<3>(param));
     cv::Scalar out_scalar;
 
@@ -862,8 +835,8 @@ TEST_P(ThresholdTest, AccuracyTestBinary)
     }
     // Comparison //////////////////////////////////////////////////////////////
     {
-        EXPECT_EQ(0, cv::countNonZero(out_mat_ocv != out_mat_gapi));
-        EXPECT_EQ(out_mat_gapi.size(), sz_in);
+        ASSERT_EQ(out_mat_gapi.size(), sz_in);
+        EXPECT_EQ(0, cv::norm(out_mat_ocv, out_mat_gapi, NORM_L1));
     }
 }
 
@@ -875,8 +848,7 @@ TEST_P(ThresholdOTTest, AccuracyTestOtsu)
     int tt = std::get<2>(param);
 
     auto compile_args = std::get<4>(param);
-    auto& rng = cv::theRNG();
-    cv::Scalar maxval = cv::Scalar(50 + rng(50),50 + rng(50),50 + rng(50),50 + rng(50));
+    cv::Scalar maxval = initScalarRandU(50) + cv::Scalar(50, 50, 50, 50);
     initMatrixRandU(type, sz_in, type, std::get<3>(param));
     cv::Scalar out_gapi_scalar;
     double ocv_res;
@@ -908,9 +880,8 @@ TEST_P(InRangeTest, AccuracyTest)
     cv::Size sz_in = std::get<1>(param);
 
     auto compile_args = std::get<3>(param);
-    auto& rng = cv::theRNG();
-    cv::Scalar thrLow = cv::Scalar(rng(100),rng(100),rng(100),rng(100));
-    cv::Scalar thrUp = cv::Scalar(100 + rng(100),100 + rng(100),100 + rng(100),100 + rng(100));
+    cv::Scalar thrLow = initScalarRandU(100);
+    cv::Scalar thrUp = initScalarRandU(100) + cv::Scalar(100, 100, 100, 100);
     initMatrixRandU(type, sz_in, type, std::get<2>(param));
 
     // G-API code //////////////////////////////////////////////////////////////
@@ -993,7 +964,7 @@ TEST_P(Split4Test, AccuracyTest)
     }
 }
 
-static void ResizeAccuracyTest(int type, int interp, cv::Size sz_in, cv::Size sz_out, double fx, double fy, double tolerance, cv::GCompileArgs&& compile_args)
+static void ResizeAccuracyTest(compare_f cmpF, int type, int interp, cv::Size sz_in, cv::Size sz_out, double fx, double fy, cv::GCompileArgs&& compile_args)
 {
     cv::Mat in_mat1 (sz_in, type );
     cv::Scalar mean = cv::Scalar::all(127);
@@ -1019,30 +990,29 @@ static void ResizeAccuracyTest(int type, int interp, cv::Size sz_in, cv::Size sz
     }
     // Comparison //////////////////////////////////////////////////////////////
     {
-        cv::Mat absDiff;
-        cv::absdiff(out_mat, out_mat_ocv, absDiff);
-        EXPECT_EQ(0, cv::countNonZero(absDiff > tolerance));
+        EXPECT_TRUE(cmpF(out_mat, out_mat_ocv));
     }
 }
 
 TEST_P(ResizeTest, AccuracyTest)
 {
+    compare_f cmpF;
     int type = 0, interp = 0;
     cv::Size sz_in, sz_out;
-    double tolerance = 0.0;
     cv::GCompileArgs compile_args;
-    std::tie(type, interp, sz_in, sz_out, tolerance, compile_args) = GetParam();
-    ResizeAccuracyTest(type, interp, sz_in, sz_out, 0.0, 0.0, tolerance, std::move(compile_args));
+    std::tie(cmpF, type, interp, sz_in, sz_out, compile_args) = GetParam();
+    ResizeAccuracyTest(cmpF, type, interp, sz_in, sz_out, 0.0, 0.0, std::move(compile_args));
 }
 
 TEST_P(ResizeTestFxFy, AccuracyTest)
 {
+    compare_f cmpF;
     int type = 0, interp = 0;
     cv::Size sz_in;
-    double fx = 0.0, fy = 0.0, tolerance = 0.0;
+    double fx = 0.0, fy = 0.0;
     cv::GCompileArgs compile_args;
-    std::tie(type, interp, sz_in, fx, fy, tolerance, compile_args) = GetParam();
-    ResizeAccuracyTest(type, interp, sz_in, cv::Size{0, 0}, fx, fy, tolerance, std::move(compile_args));
+    std::tie(cmpF, type, interp, sz_in, fx, fy, compile_args) = GetParam();
+    ResizeAccuracyTest(cmpF, type, interp, sz_in, cv::Size{0, 0}, fx, fy, std::move(compile_args));
 }
 
 TEST_P(Merge3Test, AccuracyTest)
@@ -1369,7 +1339,8 @@ TEST_P(LUTTest, AccuracyTest)
 
     initMatrixRandU(type_mat, sz_in, type_out);
     cv::Size sz_lut = cv::Size(1, 256);
-    cv::Mat in_lut (sz_lut, type_lut);
+    cv::Mat in_lut(sz_lut, type_lut);
+    cv::randu(in_lut, cv::Scalar::all(0), cv::Scalar::all(255));
 
     // G-API code //////////////////////////////////////////////////////////////
     cv::GMat in;
@@ -1412,6 +1383,92 @@ TEST_P(ConvertToTest, AccuracyTest)
     {
         EXPECT_EQ(0, cv::countNonZero(out_mat_ocv != out_mat_gapi));
         EXPECT_EQ(out_mat_gapi.size(), sz_in);
+    }
+}
+
+TEST_P(PhaseTest, AccuracyTest)
+{
+    int img_type = -1;
+    cv::Size img_size;
+    bool angle_in_degrees = false;
+    cv::GCompileArgs compile_args;
+    std::tie(img_type, img_size, angle_in_degrees, compile_args) = GetParam();
+    initMatsRandU(img_type, img_size, img_type);
+
+    // G-API code //////////////////////////////////////////////////////////////
+    cv::GMat in_x, in_y;
+    auto out = cv::gapi::phase(in_x, in_y, angle_in_degrees);
+
+    cv::GComputation c(in_x, in_y, out);
+    c.apply(in_mat1, in_mat2, out_mat_gapi, std::move(compile_args));
+
+    // OpenCV code /////////////////////////////////////////////////////////////
+    cv::phase(in_mat1, in_mat2, out_mat_ocv, angle_in_degrees);
+
+    // Comparison //////////////////////////////////////////////////////////////
+    // FIXME: use a comparison functor instead (after enabling OpenCL)
+    {
+        EXPECT_EQ(0, cv::countNonZero(out_mat_ocv != out_mat_gapi));
+    }
+}
+
+TEST_P(SqrtTest, AccuracyTest)
+{
+    int img_type = -1;
+    cv::Size img_size;
+    cv::GCompileArgs compile_args;
+    std::tie(img_type, img_size, compile_args) = GetParam();
+    initMatrixRandU(img_type, img_size, img_type);
+
+    // G-API code //////////////////////////////////////////////////////////////
+    cv::GMat in;
+    auto out = cv::gapi::sqrt(in);
+
+    cv::GComputation c(in, out);
+    c.apply(in_mat1, out_mat_gapi, std::move(compile_args));
+
+    // OpenCV code /////////////////////////////////////////////////////////////
+    cv::sqrt(in_mat1, out_mat_ocv);
+
+    // Comparison //////////////////////////////////////////////////////////////
+    // FIXME: use a comparison functor instead (after enabling OpenCL)
+    {
+        EXPECT_EQ(0, cv::countNonZero(out_mat_ocv != out_mat_gapi));
+    }
+}
+
+TEST_P(NormalizeTest, Test)
+{
+    auto param = GetParam();
+
+    compare_f cmpF;
+    MatType type, ddepth;
+    cv::Size sz;
+    double a = 0 , b = 0;
+    int norm_type = 0;
+    bool createOut = 0;
+    cv::GCompileArgs compile_args;
+
+    std::tie(cmpF, type, sz, a, b, norm_type, ddepth, createOut, compile_args) = GetParam();
+    int dtype = CV_MAKETYPE(ddepth, CV_MAT_CN(type));
+
+    initMatsRandN(type, sz, dtype, createOut);
+
+    // G-API code //////////////////////////////////////////////////////////////
+    cv::GMat in;
+    auto out = cv::gapi::normalize(in, a, b, norm_type, ddepth);
+
+    cv::GComputation c(cv::GIn(in), cv::GOut(out));
+    c.apply(cv::gin(in_mat1), cv::gout(out_mat_gapi), std::move(compile_args));
+
+    // OpenCV code /////////////////////////////////////////////////////////////
+    {
+        cv::normalize(in_mat1, out_mat_ocv, a, b, norm_type, ddepth);
+    }
+    // Comparison //////////////////////////////////////////////////////////////
+    {
+        EXPECT_TRUE(cmpF(out_mat_gapi, out_mat_ocv));
+        EXPECT_EQ(out_mat_gapi.size(), sz);
     }
 }
 

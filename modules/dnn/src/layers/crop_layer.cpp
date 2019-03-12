@@ -67,8 +67,12 @@ public:
 
     virtual bool supportBackend(int backendId) CV_OVERRIDE
     {
-        return backendId == DNN_BACKEND_OPENCV ||
-               backendId == DNN_BACKEND_INFERENCE_ENGINE && crop_ranges.size() == 4;
+#ifdef HAVE_INF_ENGINE
+        if (backendId == DNN_BACKEND_INFERENCE_ENGINE)
+            return INF_ENGINE_VER_MAJOR_LT(INF_ENGINE_RELEASE_2018R5) && crop_ranges.size() == 4;
+        else
+#endif
+            return backendId == DNN_BACKEND_OPENCV;
     }
 
     bool getMemoryShapes(const std::vector<MatShape> &inputs,
@@ -137,12 +141,6 @@ public:
         CV_TRACE_FUNCTION();
         CV_TRACE_ARG_VALUE(name, "name", name.c_str());
 
-        if (inputs_arr.depth() == CV_16S)
-        {
-            forward_fallback(inputs_arr, outputs_arr, internals_arr);
-            return;
-        }
-
         std::vector<Mat> inputs, outputs;
         inputs_arr.getMatVector(inputs);
         outputs_arr.getMatVector(outputs);
@@ -151,9 +149,10 @@ public:
         input(&crop_ranges[0]).copyTo(outputs[0]);
     }
 
+#ifdef HAVE_INF_ENGINE
     virtual Ptr<BackendNode> initInfEngine(const std::vector<Ptr<BackendWrapper> >&) CV_OVERRIDE
     {
-#ifdef HAVE_INF_ENGINE
+#if INF_ENGINE_VER_MAJOR_LT(INF_ENGINE_RELEASE_2018R5)
         InferenceEngine::LayerParams lp;
         lp.name = name;
         lp.type = "Crop";
@@ -162,6 +161,14 @@ public:
 
         CV_Assert(crop_ranges.size() == 4);
 
+#if INF_ENGINE_VER_MAJOR_GT(INF_ENGINE_RELEASE_2018R3)
+        for (int i = 0; i < 4; ++i)
+        {
+            ieLayer->axis.push_back(i);
+            ieLayer->offset.push_back(crop_ranges[i].start);
+            ieLayer->dim.push_back(crop_ranges[i].end - crop_ranges[i].start);
+        }
+#else
         ieLayer->axis.push_back(0);  // batch
         ieLayer->offset.push_back(crop_ranges[0].start);
         ieLayer->dim.push_back(crop_ranges[0].end - crop_ranges[0].start);
@@ -177,11 +184,13 @@ public:
         ieLayer->axis.push_back(2);  // width
         ieLayer->offset.push_back(crop_ranges[3].start);
         ieLayer->dim.push_back(crop_ranges[3].end - crop_ranges[3].start);
-
+#endif
         return Ptr<BackendNode>(new InfEngineBackendNode(ieLayer));
-#endif  // HAVE_INF_ENGINE
+#else
         return Ptr<BackendNode>();
+#endif  // IE < R5
     }
+#endif
 
     std::vector<Range> crop_ranges;
 };

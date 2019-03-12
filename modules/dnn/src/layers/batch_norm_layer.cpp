@@ -10,6 +10,7 @@ Implementation of Batch Normalization layer.
 */
 
 #include "../precomp.hpp"
+#include "layers_common.hpp"
 #include "../op_halide.hpp"
 #include "../op_inf_engine.hpp"
 #include <opencv2/dnn/shape_utils.hpp>
@@ -150,8 +151,8 @@ public:
     virtual bool supportBackend(int backendId) CV_OVERRIDE
     {
         return backendId == DNN_BACKEND_OPENCV ||
-               backendId == DNN_BACKEND_HALIDE && haveHalide() ||
-               backendId == DNN_BACKEND_INFERENCE_ENGINE && haveInfEngine();
+               (backendId == DNN_BACKEND_HALIDE && haveHalide()) ||
+               (backendId == DNN_BACKEND_INFERENCE_ENGINE && haveInfEngine());
     }
 
 #ifdef HAVE_OPENCL
@@ -172,8 +173,8 @@ public:
 
         if (umat_weight.empty())
         {
-            umat_weight = weights_.getUMat(ACCESS_READ);
-            umat_bias = bias_.getUMat(ACCESS_READ);
+            weights_.copyTo(umat_weight);
+            bias_.copyTo(umat_bias);
         }
 
         UMat &inpBlob = inputs[0];
@@ -230,8 +231,7 @@ public:
         CV_TRACE_FUNCTION();
         CV_TRACE_ARG_VALUE(name, "name", name.c_str());
 
-        CV_OCL_RUN(IS_DNN_OPENCL_TARGET(preferableTarget) &&
-                   OCL_PERFORMANCE_CHECK(ocl::Device::getDefault().isIntel()),
+        CV_OCL_RUN(IS_DNN_OPENCL_TARGET(preferableTarget),
                    forward_ocl(inputs_arr, outputs_arr, internals_arr))
 
         if (inputs_arr.depth() == CV_16S)
@@ -285,10 +285,10 @@ public:
                 v_float32x4 x1 = v_load(srcptr + i + 4);
                 v_float32x4 x2 = v_load(srcptr + i + 8);
                 v_float32x4 x3 = v_load(srcptr + i + 12);
-                x0 = v_muladd(x0, w, b);
-                x1 = v_muladd(x1, w, b);
-                x2 = v_muladd(x2, w, b);
-                x3 = v_muladd(x3, w, b);
+                x0 = v_muladd(x0, wV, bV);
+                x1 = v_muladd(x1, wV, bV);
+                x2 = v_muladd(x2, wV, bV);
+                x3 = v_muladd(x3, wV, bV);
                 v_store(dstptr + i, x0);
                 v_store(dstptr + i + 4, x1);
                 v_store(dstptr + i + 8, x2);
@@ -349,6 +349,13 @@ public:
     virtual Ptr<BackendNode> initInfEngine(const std::vector<Ptr<BackendWrapper> >&) CV_OVERRIDE
     {
 #ifdef HAVE_INF_ENGINE
+#if INF_ENGINE_VER_MAJOR_GE(INF_ENGINE_RELEASE_2018R5)
+        InferenceEngine::Builder::Layer ieLayer = InferenceEngine::Builder::ScaleShiftLayer(name);
+        const size_t numChannels = weights_.total();
+        addConstantData("weights", wrapToInfEngineBlob(weights_, {numChannels}, InferenceEngine::Layout::C), ieLayer);
+        addConstantData("biases", wrapToInfEngineBlob(bias_, {numChannels}, InferenceEngine::Layout::C), ieLayer);
+        return Ptr<BackendNode>(new InfEngineBackendNode(ieLayer));
+#else
         InferenceEngine::LayerParams lp;
         lp.name = name;
         lp.type = "ScaleShift";
@@ -360,6 +367,7 @@ public:
         ieLayer->_biases = wrapToInfEngineBlob(bias_, {numChannels}, InferenceEngine::Layout::C);
 
         return Ptr<BackendNode>(new InfEngineBackendNode(ieLayer));
+#endif
 #endif  // HAVE_INF_ENGINE
         return Ptr<BackendNode>();
     }

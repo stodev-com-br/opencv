@@ -144,6 +144,12 @@ namespace core {
         }
     };
 
+    G_TYPED_KERNEL(GPhase, <GMat(GMat, GMat, bool)>, "org.opencv.core.math.phase") {
+        static GMatDesc outMeta(const GMatDesc &inx, const GMatDesc &, bool) {
+            return inx;
+        }
+    };
+
     G_TYPED_KERNEL(GMask, <GMat(GMat,GMat)>, "org.opencv.core.pixelwise.mask") {
         static GMatDesc outMeta(GMatDesc in, GMatDesc) {
             return in;
@@ -447,6 +453,19 @@ namespace core {
             return rdepth < 0 ? in : in.withDepth(rdepth);
         }
     };
+
+    G_TYPED_KERNEL(GSqrt, <GMat(GMat)>, "org.opencv.core.math.sqrt") {
+        static GMatDesc outMeta(GMatDesc in) {
+            return in;
+        }
+    };
+
+    G_TYPED_KERNEL(GNormalize, <GMat(GMat, double, double, int, int)>, "org.opencv.core.normalize") {
+        static GMatDesc outMeta(GMatDesc in, double, double, int, int ddepth) {
+            // unlike opencv doesn't have a mask as a parameter
+            return (ddepth < 0 ? in : in.withDepth(ddepth));
+        }
+    };
 }
 
 //! @addtogroup gapi_math
@@ -581,7 +600,7 @@ Supported matrix data types are @ref CV_8UC1, @ref CV_8UC3, @ref CV_16UC1, @ref 
 @param ddepth optional depth of the output matrix.
 @sa add, sub, div, addWeighted
 */
-GAPI_EXPORTS GMat mul(const GMat& src1, const GMat& src2, double scale, int ddepth = -1);
+GAPI_EXPORTS GMat mul(const GMat& src1, const GMat& src2, double scale = 1.0, int ddepth = -1);
 
 /** @brief Multiplies matrix by scalar.
 
@@ -738,6 +757,35 @@ in radians (which is by default), or in degrees.
 */
 GAPI_EXPORTS std::tuple<GMat, GMat> cartToPolar(const GMat& x, const GMat& y,
                                               bool angleInDegrees = false);
+
+/** @brief Calculates the rotation angle of 2D vectors.
+
+The function cv::phase calculates the rotation angle of each 2D vector that
+is formed from the corresponding elements of x and y :
+\f[\texttt{angle} (I) =  \texttt{atan2} ( \texttt{y} (I), \texttt{x} (I))\f]
+
+The angle estimation accuracy is about 0.3 degrees. When x(I)=y(I)=0 ,
+the corresponding angle(I) is set to 0.
+@param x input floating-point array of x-coordinates of 2D vectors.
+@param y input array of y-coordinates of 2D vectors; it must have the
+same size and the same type as x.
+@param angleInDegrees when true, the function calculates the angle in
+degrees, otherwise, they are measured in radians.
+@return array of vector angles; it has the same size and same type as x.
+*/
+GAPI_EXPORTS GMat phase(const GMat& x, const GMat &y, bool angleInDegrees = false);
+
+/** @brief Calculates a square root of array elements.
+
+The function cv::gapi::sqrt calculates a square root of each input array element.
+In case of multi-channel arrays, each channel is processed
+independently. The accuracy is approximately the same as of the built-in
+std::sqrt .
+@param src input floating-point array.
+@return output array of the same size and type as src.
+*/
+GAPI_EXPORTS GMat sqrt(const GMat &src);
+
 //! @} gapi_math
 //!
 //! @addtogroup gapi_pixelwise
@@ -1207,7 +1255,7 @@ GAPI_EXPORTS std::tuple<GMat, GMat> integral(const GMat& src, int sdepth = -1, i
 /** @brief Applies a fixed-level threshold to each matrix element.
 
 The function applies fixed-level thresholding to a single- or multiple-channel matrix.
-The function is typically used to get a bi-level (binary) image out of a grayscale image ( cmp funtions could be also used for
+The function is typically used to get a bi-level (binary) image out of a grayscale image ( cmp functions could be also used for
 this purpose) or for removing a noise, that is, filtering out pixels with too small or too large
 values. There are several depths of thresholding supported by the function. They are determined by
 depth parameter.
@@ -1551,6 +1599,29 @@ same as the input has; if rdepth is negative, the output matrix will have the sa
 @param beta optional delta added to the scaled values.
  */
 GAPI_EXPORTS GMat convertTo(const GMat& src, int rdepth, double alpha=1, double beta=0);
+
+/** @brief Normalizes the norm or value range of an array.
+
+The function normalizes scale and shift the input array elements so that
+\f[\| \texttt{dst} \| _{L_p}= \texttt{alpha}\f]
+(where p=Inf, 1 or 2) when normType=NORM_INF, NORM_L1, or NORM_L2, respectively; or so that
+\f[\min _I  \texttt{dst} (I)= \texttt{alpha} , \, \, \max _I  \texttt{dst} (I)= \texttt{beta}\f]
+when normType=NORM_MINMAX (for dense arrays only).
+
+@note Function textual ID is "org.opencv.core.normalize"
+
+@param src input array.
+@param alpha norm value to normalize to or the lower range boundary in case of the range
+normalization.
+@param beta upper range boundary in case of the range normalization; it is not used for the norm
+normalization.
+@param norm_type normalization type (see cv::NormTypes).
+@param ddepth when negative, the output array has the same type as src; otherwise, it has the same
+number of channels as src and the depth =ddepth.
+@sa norm, Mat::convertTo
+*/
+GAPI_EXPORTS GMat normalize(const GMat& src, double alpha, double beta,
+                            int norm_type, int ddepth = -1);
 //! @} gapi_transform
 
 } //namespace gapi

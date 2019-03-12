@@ -119,10 +119,14 @@ template <typename R> struct Data
             d[i] += (LaneType)m;
         return *this;
     }
+    void fill(LaneType val, int s, int c = R::nlanes)
+    {
+        for (int i = s; i < c; ++i)
+            d[i] = val;
+    }
     void fill(LaneType val)
     {
-        for (int i = 0; i < R::nlanes; ++i)
-            d[i] = val;
+        fill(val, 0);
     }
     void reverse()
     {
@@ -407,10 +411,13 @@ template<typename R> struct TheTest
 
         Data<Rx2> resB = vx_load_expand(dataA.d);
 
-        Rx2 c, d;
+        Rx2 c, d, e, f;
         v_expand(a, c, d);
 
-        Data<Rx2> resC = c, resD = d;
+        e = v_expand_low(a);
+        f = v_expand_high(a);
+
+        Data<Rx2> resC = c, resD = d, resE = e, resF = f;
         const int n = Rx2::nlanes;
         for (int i = 0; i < n; ++i)
         {
@@ -418,6 +425,8 @@ template<typename R> struct TheTest
             EXPECT_EQ(dataA[i], resB[i]);
             EXPECT_EQ(dataA[i], resC[i]);
             EXPECT_EQ(dataA[i + n], resD[i]);
+            EXPECT_EQ(dataA[i], resE[i]);
+            EXPECT_EQ(dataA[i + n], resF[i]);
         }
 
         return *this;
@@ -455,19 +464,21 @@ template<typename R> struct TheTest
         return *this;
     }
 
-    TheTest & test_addsub_wrap()
+    TheTest & test_arithm_wrap()
     {
         Data<R> dataA, dataB;
         dataB.reverse();
         R a = dataA, b = dataB;
 
         Data<R> resC = v_add_wrap(a, b),
-                resD = v_sub_wrap(a, b);
+                resD = v_sub_wrap(a, b),
+                resE = v_mul_wrap(a, b);
         for (int i = 0; i < R::nlanes; ++i)
         {
             SCOPED_TRACE(cv::format("i=%d", i));
             EXPECT_EQ((LaneType)(dataA[i] + dataB[i]), resC[i]);
             EXPECT_EQ((LaneType)(dataA[i] - dataB[i]), resD[i]);
+            EXPECT_EQ((LaneType)(dataA[i] * dataB[i]), resE[i]);
         }
         return *this;
     }
@@ -475,6 +486,7 @@ template<typename R> struct TheTest
     TheTest & test_mul()
     {
         Data<R> dataA, dataB;
+        dataA[1] = static_cast<LaneType>(std::numeric_limits<LaneType>::max());
         dataB.reverse();
         R a = dataA, b = dataB;
 
@@ -482,7 +494,7 @@ template<typename R> struct TheTest
         for (int i = 0; i < R::nlanes; ++i)
         {
             SCOPED_TRACE(cv::format("i=%d", i));
-            EXPECT_EQ(dataA[i] * dataB[i], resC[i]);
+            EXPECT_EQ(saturate_cast<LaneType>(dataA[i] * dataB[i]), resC[i]);
         }
 
         return *this;
@@ -731,6 +743,23 @@ template<typename R> struct TheTest
         return *this;
     }
 
+    TheTest & test_absdiffs()
+    {
+        Data<R> dataA(std::numeric_limits<LaneType>::max()),
+                dataB(std::numeric_limits<LaneType>::min());
+        dataA[0] = (LaneType)-1;
+        dataB[0] = 1;
+        dataA[1] = 2;
+        dataB[1] = (LaneType)-2;
+        R a = dataA, b = dataB;
+        Data<R> resC = v_absdiffs(a, b);
+        for (int i = 0; i < R::nlanes; ++i)
+        {
+            EXPECT_EQ(saturate_cast<LaneType>(std::abs(dataA[i] - dataB[i])), resC[i]);
+        }
+        return *this;
+    }
+
     TheTest & test_reduce()
     {
         Data<R> dataA;
@@ -863,6 +892,81 @@ template<typename R> struct TheTest
             EXPECT_EQ(pack_saturate_cast<LaneType>((dataB[i] + add) >> s), resF[i]);
             EXPECT_EQ((LaneType)0, resF[i + n]);
         }
+        return *this;
+    }
+
+    // v_uint8 only
+    TheTest & test_pack_b()
+    {
+        // 16-bit
+        Data<R> dataA, dataB;
+        dataB.fill(0, R::nlanes / 2);
+
+        R a = dataA, b = dataB;
+        Data<R> maskA = a == b, maskB = a != b;
+
+        a = maskA; b = maskB;
+        Data<R> res  = v_pack_b(v_reinterpret_as_u16(a), v_reinterpret_as_u16(b));
+        for (int i = 0; i < v_uint16::nlanes; ++i)
+        {
+            SCOPED_TRACE(cv::format("i=%d", i));
+            EXPECT_EQ(maskA[i * 2], res[i]);
+            EXPECT_EQ(maskB[i * 2], res[i + v_uint16::nlanes]);
+        }
+
+        // 32-bit
+        Data<R> dataC, dataD;
+        dataD.fill(0, R::nlanes / 2);
+
+        R c = dataC, d = dataD;
+        Data<R> maskC = c == d, maskD = c != d;
+
+        c = maskC; d = maskD;
+        res = v_pack_b
+        (
+            v_reinterpret_as_u32(a), v_reinterpret_as_u32(b),
+            v_reinterpret_as_u32(c), v_reinterpret_as_u32(d)
+        );
+
+        for (int i = 0; i < v_uint32::nlanes; ++i)
+        {
+            SCOPED_TRACE(cv::format("i=%d", i));
+            EXPECT_EQ(maskA[i * 4], res[i]);
+            EXPECT_EQ(maskB[i * 4], res[i + v_uint32::nlanes]);
+            EXPECT_EQ(maskC[i * 4], res[i + v_uint32::nlanes * 2]);
+            EXPECT_EQ(maskD[i * 4], res[i + v_uint32::nlanes * 3]);
+        }
+
+        // 64-bit
+        Data<R> dataE, dataF, dataG(0), dataH(0xFF);
+        dataF.fill(0, R::nlanes / 2);
+
+        R e = dataE, f = dataF, g = dataG, h = dataH;
+        Data<R> maskE = e == f, maskF = e != f;
+
+        e = maskE; f = maskF;
+        res = v_pack_b
+        (
+            v_reinterpret_as_u64(a), v_reinterpret_as_u64(b),
+            v_reinterpret_as_u64(c), v_reinterpret_as_u64(d),
+            v_reinterpret_as_u64(e), v_reinterpret_as_u64(f),
+            v_reinterpret_as_u64(g), v_reinterpret_as_u64(h)
+        );
+
+        for (int i = 0; i < v_uint64::nlanes; ++i)
+        {
+            SCOPED_TRACE(cv::format("i=%d", i));
+            EXPECT_EQ(maskA[i * 8], res[i]);
+            EXPECT_EQ(maskB[i * 8], res[i + v_uint64::nlanes]);
+            EXPECT_EQ(maskC[i * 8], res[i + v_uint64::nlanes * 2]);
+            EXPECT_EQ(maskD[i * 8], res[i + v_uint64::nlanes * 3]);
+
+            EXPECT_EQ(maskE[i * 8], res[i + v_uint64::nlanes * 4]);
+            EXPECT_EQ(maskF[i * 8], res[i + v_uint64::nlanes * 5]);
+            EXPECT_EQ(dataG[i * 8], res[i + v_uint64::nlanes * 6]);
+            EXPECT_EQ(dataH[i * 8], res[i + v_uint64::nlanes * 7]);
+        }
+
         return *this;
     }
 
@@ -1209,7 +1313,9 @@ void test_hal_intrin_uint8()
         .test_expand()
         .test_expand_q()
         .test_addsub()
-        .test_addsub_wrap()
+        .test_arithm_wrap()
+        .test_mul()
+        .test_mul_expand()
         .test_cmp()
         .test_logic()
         .test_min_max()
@@ -1218,6 +1324,7 @@ void test_hal_intrin_uint8()
         .test_popcount()
         .test_pack<1>().test_pack<2>().test_pack<3>().test_pack<8>()
         .test_pack_u<1>().test_pack_u<2>().test_pack_u<3>().test_pack_u<8>()
+        .test_pack_b()
         .test_unpack()
         .test_extract<0>().test_extract<1>().test_extract<8>().test_extract<15>()
         .test_rotate<0>().test_rotate<1>().test_rotate<8>().test_rotate<15>()
@@ -1242,11 +1349,14 @@ void test_hal_intrin_int8()
         .test_expand()
         .test_expand_q()
         .test_addsub()
-        .test_addsub_wrap()
+        .test_arithm_wrap()
+        .test_mul()
+        .test_mul_expand()
         .test_cmp()
         .test_logic()
         .test_min_max()
         .test_absdiff()
+        .test_absdiffs()
         .test_abs()
         .test_mask()
         .test_popcount()
@@ -1267,7 +1377,7 @@ void test_hal_intrin_uint16()
         .test_interleave()
         .test_expand()
         .test_addsub()
-        .test_addsub_wrap()
+        .test_arithm_wrap()
         .test_mul()
         .test_mul_expand()
         .test_cmp()
@@ -1295,7 +1405,7 @@ void test_hal_intrin_int16()
         .test_interleave()
         .test_expand()
         .test_addsub()
-        .test_addsub_wrap()
+        .test_arithm_wrap()
         .test_mul()
         .test_mul_expand()
         .test_cmp()
@@ -1305,6 +1415,7 @@ void test_hal_intrin_int16()
         .test_logic()
         .test_min_max()
         .test_absdiff()
+        .test_absdiffs()
         .test_abs()
         .test_reduce()
         .test_mask()

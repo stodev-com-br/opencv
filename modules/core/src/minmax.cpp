@@ -8,6 +8,14 @@
 #include "opencv2/core/openvx/ovx_defs.hpp"
 #include "stat.hpp"
 
+#undef HAVE_IPP
+#undef CV_IPP_RUN_FAST
+#define CV_IPP_RUN_FAST(f, ...)
+#undef CV_IPP_RUN
+#define CV_IPP_RUN(c, f, ...)
+
+#define IPP_DISABLE_MINMAXIDX_MANY_ROWS 1  // see Core_MinMaxIdx.rows_overflow test
+
 /****************************************************************************************\
 *                                       minMaxLoc                                        *
 \****************************************************************************************/
@@ -431,11 +439,11 @@ static bool openvx_minMaxIdx(Mat &src, double* minVal, double* maxVal, int* minI
             ofs2idx(src, maxidx, maxIdx);
         }
     }
-    catch (ivx::RuntimeError & e)
+    catch (const ivx::RuntimeError & e)
     {
         VX_DbgThrow(e.what());
     }
-    catch (ivx::WrapperError & e)
+    catch (const ivx::WrapperError & e)
     {
         VX_DbgThrow(e.what());
     }
@@ -624,6 +632,10 @@ static bool ipp_minMaxIdx(Mat &src, double* _minVal, double* _maxVal, int* _minI
     if(src.dims <= 2)
     {
         IppiSize size = ippiSize(src.size());
+#if defined(_WIN32) && !defined(_WIN64) && IPP_VERSION_X100 == 201900 && IPP_DISABLE_MINMAXIDX_MANY_ROWS
+        if (size.height > 65536)
+            return false;  // test: Core_MinMaxIdx.rows_overflow
+#endif
         size.width *= src.channels();
 
         status = ippMinMaxFun(src.ptr(), (int)src.step, size, dataType, pMinVal, pMaxVal, pMinIdx, pMaxIdx, (Ipp8u*)mask.ptr(), (int)mask.step);

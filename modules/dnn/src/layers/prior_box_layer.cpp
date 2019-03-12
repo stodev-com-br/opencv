@@ -43,6 +43,7 @@
 #include "../precomp.hpp"
 #include "layers_common.hpp"
 #include "../op_inf_engine.hpp"
+#include "../op_vkcom.hpp"
 #include <float.h>
 #include <algorithm>
 #include <cmath>
@@ -271,7 +272,8 @@ public:
     virtual bool supportBackend(int backendId) CV_OVERRIDE
     {
         return backendId == DNN_BACKEND_OPENCV ||
-               backendId == DNN_BACKEND_INFERENCE_ENGINE && haveInfEngine();
+               (backendId == DNN_BACKEND_INFERENCE_ENGINE && haveInfEngine()) ||
+               (backendId == DNN_BACKEND_VKCOM && haveVulkan());
     }
 
     bool getMemoryShapes(const std::vector<MatShape> &inputs,
@@ -402,8 +404,7 @@ public:
         CV_TRACE_FUNCTION();
         CV_TRACE_ARG_VALUE(name, "name", name.c_str());
 
-        CV_OCL_RUN(IS_DNN_OPENCL_TARGET(preferableTarget) &&
-                   OCL_PERFORMANCE_CHECK(ocl::Device::getDefault().isIntel()),
+        CV_OCL_RUN(IS_DNN_OPENCL_TARGET(preferableTarget),
                    forward_ocl(inputs_arr, outputs_arr, internals_arr))
 
         if (inputs_arr.depth() == CV_16S)
@@ -481,9 +482,81 @@ public:
         }
     }
 
+    virtual Ptr<BackendNode> initVkCom(const std::vector<Ptr<BackendWrapper> > &input) CV_OVERRIDE
+    {
+#ifdef HAVE_VULKAN
+        std::shared_ptr<vkcom::OpBase> op(new vkcom::OpPriorBox(_stepX, _stepY,
+                                                                _clip, _numPriors,
+                                                                _variance, _offsetsX,
+                                                                _offsetsY, _boxWidths,
+                                                                _boxHeights));
+        return Ptr<BackendNode>(new VkComBackendNode(input, op));
+#endif // HAVE_VULKAN
+        return Ptr<BackendNode>();
+    }
+
     virtual Ptr<BackendNode> initInfEngine(const std::vector<Ptr<BackendWrapper> >&) CV_OVERRIDE
     {
 #ifdef HAVE_INF_ENGINE
+#if INF_ENGINE_VER_MAJOR_GE(INF_ENGINE_RELEASE_2018R5)
+        if (_explicitSizes)
+        {
+            InferenceEngine::Builder::PriorBoxClusteredLayer ieLayer(name);
+            ieLayer.setSteps({_stepY, _stepX});
+
+            CV_CheckEQ(_offsetsX.size(), (size_t)1, ""); CV_CheckEQ(_offsetsY.size(), (size_t)1, ""); CV_CheckEQ(_offsetsX[0], _offsetsY[0], "");
+            ieLayer.setOffset(_offsetsX[0]);
+
+            ieLayer.setClip(_clip);
+            ieLayer.setFlip(false);  // We already flipped aspect ratios.
+
+            InferenceEngine::Builder::Layer l = ieLayer;
+
+            CV_Assert_N(!_boxWidths.empty(), !_boxHeights.empty(), !_variance.empty());
+            CV_Assert(_boxWidths.size() == _boxHeights.size());
+            l.getParameters()["width"] = _boxWidths;
+            l.getParameters()["height"] = _boxHeights;
+            l.getParameters()["variance"] = _variance;
+            return Ptr<BackendNode>(new InfEngineBackendNode(l));
+        }
+        else
+        {
+            InferenceEngine::Builder::PriorBoxLayer ieLayer(name);
+
+            CV_Assert(!_explicitSizes);
+
+            ieLayer.setMinSize(_minSize);
+            if (_maxSize > 0)
+                ieLayer.setMaxSize(_maxSize);
+
+            CV_CheckEQ(_offsetsX.size(), (size_t)1, ""); CV_CheckEQ(_offsetsY.size(), (size_t)1, ""); CV_CheckEQ(_offsetsX[0], _offsetsY[0], "");
+            ieLayer.setOffset(_offsetsX[0]);
+
+            ieLayer.setClip(_clip);
+            ieLayer.setFlip(false);  // We already flipped aspect ratios.
+
+            InferenceEngine::Builder::Layer l = ieLayer;
+            if (_stepX == _stepY)
+            {
+                l.getParameters()["step"] = _stepX;
+                l.getParameters()["step_h"] = 0.0f;
+                l.getParameters()["step_w"] = 0.0f;
+            }
+            else
+            {
+                l.getParameters()["step"] = 0.0f;
+                l.getParameters()["step_h"] = _stepY;
+                l.getParameters()["step_w"] = _stepX;
+            }
+            if (!_aspectRatios.empty())
+            {
+                l.getParameters()["aspect_ratio"] = _aspectRatios;
+            }
+            CV_Assert(!_variance.empty());
+            l.getParameters()["variance"] = _variance;
+            return Ptr<BackendNode>(new InfEngineBackendNode(l));
+        }
+#else
         InferenceEngine::LayerParams lp;
         lp.name = name;
         lp.type = _explicitSizes ? "PriorBoxClustered" : "PriorBox";
@@ -539,6 +612,7 @@ public:
         ieLayer->params["offset"] = format("%f", _offsetsX[0]);
 
         return Ptr<BackendNode>(new InfEngineBackendNode(ieLayer));
+#endif
 #endif  // HAVE_INF_ENGINE
         return Ptr<BackendNode>();
     }

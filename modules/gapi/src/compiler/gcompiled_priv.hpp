@@ -15,7 +15,7 @@
 #include "executor/gexecutor.hpp"
 
 // NB: BTW, GCompiled is the only "public API" class which
-// private part (implementaion) is hosted in the "compiler/" module.
+// private part (implementation) is hosted in the "compiler/" module.
 //
 // This file is here just to keep ADE hidden from the top-level APIs.
 //
@@ -45,6 +45,9 @@ public:
                const GMetaArgs &outMetas,
                std::unique_ptr<cv::gimpl::GExecutor> &&pE);
     bool isEmpty() const;
+
+    bool canReshape() const;
+    void reshape(const GMetaArgs& inMetas, const GCompileArgs &args);
 
     void run(cv::gimpl::GRuntimeArgs &&args);
     const GMetaArgs& metas() const;

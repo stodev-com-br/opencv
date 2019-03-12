@@ -5,6 +5,8 @@
 // Copyright (C) 2018 Intel Corporation
 
 
+#include "precomp.hpp"
+
 #include <sstream>
 #include <stack>
 #include <ade/util/chain_range.hpp>
@@ -99,7 +101,7 @@ void cv::gimpl::passes::checkIslands(ade::passes::PassContext &ctx)
 {
     GModel::ConstGraph gr(ctx.graph);
 
-    // The algorithm is teh following:
+    // The algorithm is the following:
     //
     // 1. Put all Tagged nodes (both Operations and Data) into a set
     // 2. Initialize Visited set as (empty)

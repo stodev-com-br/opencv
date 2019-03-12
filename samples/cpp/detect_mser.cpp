@@ -412,7 +412,7 @@ int main(int argc, char *argv[])
     string input = parser.get<string>("@input");
     if (!input.empty())
     {
-        imgOrig = imread(input, IMREAD_GRAYSCALE);
+        imgOrig = imread(samples::findFile(input), IMREAD_GRAYSCALE);
         blur(imgOrig, img, blurSize);
     }
     else
@@ -523,7 +523,7 @@ int main(int argc, char *argv[])
             imshow(winName, result);
             imshow("Original", img);
         }
-        catch (Exception& e)
+        catch (const Exception& e)
         {
             cout << "Feature: " << *itDesc << "\n";
             cout << e.msg << endl;

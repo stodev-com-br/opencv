@@ -403,6 +403,8 @@ public:
     }
     ~MotionJpegWriter() { close(); }
 
+    virtual int getCaptureDomain() const CV_OVERRIDE { return cv::CAP_OPENCV_MJPEG; }
+
     void close()
     {
         if( !container.isOpenedStream() )
@@ -1530,7 +1532,7 @@ void MotionJpegWriter::writeFrameData( const uchar* data, int step, int colorspa
 
 }
 
-Ptr<IVideoWriter> createMotionJpegWriter(const String& filename, int fourcc, double fps, Size frameSize, bool iscolor)
+Ptr<IVideoWriter> createMotionJpegWriter(const std::string &filename, int fourcc, double fps, const Size &frameSize, bool iscolor)
 {
     if (fourcc != CV_FOURCC('M', 'J', 'P', 'G'))
         return Ptr<IVideoWriter>();

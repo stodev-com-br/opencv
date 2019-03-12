@@ -5,6 +5,8 @@
 // Copyright (C) 2018 Intel Corporation
 
 
+#include "precomp.hpp"
+
 #include <vector>
 #include <stack>
 #include <unordered_map>
@@ -32,22 +34,28 @@
 #include "backends/common/gbackend.hpp"
 
 // <FIXME:>
+#if !defined(GAPI_STANDALONE)
 #include "opencv2/gapi/cpu/core.hpp"    // Also directly refer to Core
 #include "opencv2/gapi/cpu/imgproc.hpp" // ...and Imgproc kernel implementations
+#endif // !defined(GAPI_STANDALONE)
 // </FIXME:>
 
 #include "opencv2/gapi/gcompoundkernel.hpp" // compound::backend()
 
-#include "opencv2/core/cvdef.h"
 #include "logger.hpp"
 
 namespace
 {
     cv::gapi::GKernelPackage getKernelPackage(cv::GCompileArgs &args)
     {
-        static auto ocv_pkg = combine(cv::gapi::core::cpu::kernels(),
-                                      cv::gapi::imgproc::cpu::kernels(),
-                                      cv::unite_policy::KEEP);
+        static auto ocv_pkg =
+#if !defined(GAPI_STANDALONE)
+            combine(cv::gapi::core::cpu::kernels(),
+                    cv::gapi::imgproc::cpu::kernels(),
+                    cv::unite_policy::KEEP);
+#else
+            cv::gapi::GKernelPackage();
+#endif // !defined(GAPI_STANDALONE)
         auto user_pkg = cv::gimpl::getCompileArg<cv::gapi::GKernelPackage>(args);
         return combine(ocv_pkg, user_pkg.value_or(cv::gapi::GKernelPackage{}), cv::unite_policy::REPLACE);
     }
@@ -96,14 +104,16 @@ cv::gimpl::GCompiler::GCompiler(const cv::GComputation &c,
 
     // Remove GCompoundBackend to avoid calling setupBackend() with it in the list
     m_all_kernels.remove(cv::gapi::compound::backend());
-    m_e.addPass("init", "resolve_kernels", std::bind(passes::resolveKernels, _1,
+
+    m_e.addPassStage("kernels");
+    m_e.addPass("kernels", "resolve_kernels", std::bind(passes::resolveKernels, _1,
                                                      std::ref(m_all_kernels), // NB: and not copied here
                                                      lookup_order));
+    m_e.addPass("kernels", "check_islands_content", passes::checkIslandsContent);
 
-    m_e.addPass("init", "check_islands_content", passes::checkIslandsContent);
     m_e.addPassStage("meta");
     m_e.addPass("meta", "initialize",   std::bind(passes::initMeta, _1, std::ref(m_metas)));
-    m_e.addPass("meta", "propagate",    passes::inferMeta);
+    m_e.addPass("meta", "propagate",    std::bind(passes::inferMeta, _1, false));
     m_e.addPass("meta", "finalize",     passes::storeResultingMeta);
     // moved to another stage, FIXME: two dumps?
     //    m_e.addPass("meta", "dump_dot",     passes::dumpDotStdout);

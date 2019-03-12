@@ -17,8 +17,8 @@ static_assert(sizeof(float) == 4, "float must be 32 bit.");
 bool is_byte_order_swapped(double scale)
 {
   // ".pfm" format file specifies that:
-  // positive scale means big endianess;
-  // negative scale means little endianess.
+  // positive scale means big endianness;
+  // negative scale means little endianness.
 
   #ifdef WORDS_BIGENDIAN
     return scale < 0.0;
@@ -79,7 +79,7 @@ PFMDecoder::~PFMDecoder()
 {
 }
 
-PFMDecoder::PFMDecoder()
+PFMDecoder::PFMDecoder() : m_scale_factor(0), m_swap_byte_order(false)
 {
   m_strm.close();
 }

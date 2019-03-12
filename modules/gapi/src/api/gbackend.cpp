@@ -5,6 +5,7 @@
 // Copyright (C) 2018 Intel Corporation
 
 
+#include "precomp.hpp"
 #include <memory> // unique_ptr
 
 #include "opencv2/gapi/gkernel.hpp"
@@ -14,8 +15,6 @@
 #include "backends/common/gbackend.hpp"
 #include "compiler/gobjref.hpp"
 #include "compiler/gislandmodel.hpp"
-
-
 
 // GBackend private implementation /////////////////////////////////////////////
 void cv::gapi::GBackend::Priv::unpackKernel(ade::Graph             & /*graph  */ ,
@@ -84,21 +83,49 @@ namespace magazine {
 
 // FIXME implement the below functions with visit()?
 
-void bindInArg(Mag& mag, const RcDesc &rc, const GRunArg &arg)
+void bindInArg(Mag& mag, const RcDesc &rc, const GRunArg &arg, bool is_umat)
 {
     switch (rc.shape)
     {
     case GShape::GMAT:
     {
-        auto& mag_mat = mag.template slot<cv::gapi::own::Mat>()[rc.id];
         switch (arg.index())
         {
-            case GRunArg::index_of<cv::gapi::own::Mat>() : mag_mat = util::get<cv::gapi::own::Mat>(arg); break;
-            case GRunArg::index_of<cv::Mat>()            : mag_mat = to_own(util::get<cv::Mat>(arg)); break;
-            default: util::throw_error(std::logic_error("content type of the runtime argument does not match to resource description ?"));
+        case GRunArg::index_of<cv::gapi::own::Mat>() :
+            if (is_umat)
+            {
+#if !defined(GAPI_STANDALONE)
+                auto& mag_umat = mag.template slot<cv::UMat>()[rc.id];
+                mag_umat = to_ocv(util::get<cv::gapi::own::Mat>(arg)).getUMat(ACCESS_READ);
+#else
+                util::throw_error(std::logic_error("UMat is not supported in stadnalone build"));
+#endif // !defined(GAPI_STANDALONE)
+            }
+            else
+            {
+                auto& mag_mat = mag.template slot<cv::gapi::own::Mat>()[rc.id];
+                mag_mat = util::get<cv::gapi::own::Mat>(arg);
+            }
+            break;
+#if !defined(GAPI_STANDALONE)
+        case GRunArg::index_of<cv::Mat>() :
+            if (is_umat)
+            {
+                auto& mag_umat = mag.template slot<cv::UMat>()[rc.id];
+                mag_umat = (util::get<cv::UMat>(arg));
+            }
+            else
+            {
+                auto& mag_mat = mag.template slot<cv::gapi::own::Mat>()[rc.id];
+                mag_mat = to_own(util::get<cv::Mat>(arg));
+            }
+            break;
+#endif //  !defined(GAPI_STANDALONE)
+        default: util::throw_error(std::logic_error("content type of the runtime argument does not match to resource description ?"));
         }
         break;
     }
+
 
     case GShape::GSCALAR:
     {
@@ -106,7 +133,9 @@ void bindInArg(Mag& mag, const RcDesc &rc, const GRunArg &arg)
         switch (arg.index())
         {
             case GRunArg::index_of<cv::gapi::own::Scalar>() : mag_scalar = util::get<cv::gapi::own::Scalar>(arg); break;
+#if !defined(GAPI_STANDALONE)
             case GRunArg::index_of<cv::Scalar>()            : mag_scalar = to_own(util::get<cv::Scalar>(arg));    break;
+#endif //  !defined(GAPI_STANDALONE)
             default: util::throw_error(std::logic_error("content type of the runtime argument does not match to resource description ?"));
         }
         break;
@@ -121,18 +150,45 @@ void bindInArg(Mag& mag, const RcDesc &rc, const GRunArg &arg)
     }
 }
 
-void bindOutArg(Mag& mag, const RcDesc &rc, const GRunArgP &arg)
+void bindOutArg(Mag& mag, const RcDesc &rc, const GRunArgP &arg, bool is_umat)
 {
     switch (rc.shape)
     {
     case GShape::GMAT:
     {
-        auto& mag_mat = mag.template slot<cv::gapi::own::Mat>()[rc.id];
         switch (arg.index())
         {
-            case GRunArgP::index_of<cv::gapi::own::Mat*>() : mag_mat = * util::get<cv::gapi::own::Mat*>(arg); break;
-            case GRunArgP::index_of<cv::Mat*>()            : mag_mat = to_own(* util::get<cv::Mat*>(arg)); break;
-            default: util::throw_error(std::logic_error("content type of the runtime argument does not match to resource description ?"));
+        case GRunArgP::index_of<cv::gapi::own::Mat*>() :
+            if (is_umat)
+            {
+#if !defined(GAPI_STANDALONE)
+                auto& mag_umat = mag.template slot<cv::UMat>()[rc.id];
+                mag_umat = to_ocv(*(util::get<cv::gapi::own::Mat*>(arg))).getUMat(ACCESS_RW);
+#else
+                util::throw_error(std::logic_error("UMat is not supported in standalone build"));
+#endif // !defined(GAPI_STANDALONE)
+            }
+            else
+            {
+                auto& mag_mat = mag.template slot<cv::gapi::own::Mat>()[rc.id];
+                mag_mat = *util::get<cv::gapi::own::Mat*>(arg);
+            }
+            break;
+#if !defined(GAPI_STANDALONE)
+        case GRunArgP::index_of<cv::Mat*>() :
+            if (is_umat)
+            {
+                auto& mag_umat = mag.template slot<cv::UMat>()[rc.id];
+                mag_umat = (*util::get<cv::UMat*>(arg));
+            }
+            else
+            {
+                auto& mag_mat = mag.template slot<cv::gapi::own::Mat>()[rc.id];
+                mag_mat = to_own(*util::get<cv::Mat*>(arg));
+            }
+            break;
+#endif //  !defined(GAPI_STANDALONE)
+        default: util::throw_error(std::logic_error("content type of the runtime argument does not match to resource description ?"));
         }
         break;
     }
@@ -143,7 +199,9 @@ void bindOutArg(Mag& mag, const RcDesc &rc, const GRunArgP &arg)
         switch (arg.index())
         {
             case GRunArgP::index_of<cv::gapi::own::Scalar*>() : mag_scalar = *util::get<cv::gapi::own::Scalar*>(arg); break;
+#if !defined(GAPI_STANDALONE)
             case GRunArgP::index_of<cv::Scalar*>()            : mag_scalar = to_own(*util::get<cv::Scalar*>(arg)); break;
+#endif //  !defined(GAPI_STANDALONE)
             default: util::throw_error(std::logic_error("content type of the runtime argument does not match to resource description ?"));
         }
         break;
@@ -200,11 +258,21 @@ cv::GRunArg getArg(const Mag& mag, const RcDesc &ref)
     }
 }
 
-cv::GRunArgP getObjPtr(Mag& mag, const RcDesc &rc)
+cv::GRunArgP getObjPtr(Mag& mag, const RcDesc &rc, bool is_umat)
 {
     switch (rc.shape)
     {
-    case GShape::GMAT:    return GRunArgP(&mag.template slot<cv::gapi::own::Mat>()   [rc.id]);
+    case GShape::GMAT:
+        if (is_umat)
+        {
+#if !defined(GAPI_STANDALONE)
+            return GRunArgP(&mag.template slot<cv::UMat>()[rc.id]);
+#else
+            util::throw_error(std::logic_error("UMat is not supported in standalone build"));
+#endif //  !defined(GAPI_STANDALONE)
+        }
+        else
+            return GRunArgP(&mag.template slot<cv::gapi::own::Mat>()[rc.id]);
     case GShape::GSCALAR: return GRunArgP(&mag.template slot<cv::gapi::own::Scalar>()[rc.id]);
     // Note: .at() is intentional for GArray as object MUST be already there
     //   (and constructer by either bindIn/Out or resetInternal)
@@ -222,7 +290,7 @@ cv::GRunArgP getObjPtr(Mag& mag, const RcDesc &rc)
     }
 }
 
-void writeBack(const Mag& mag, const RcDesc &rc, GRunArgP &g_arg)
+void writeBack(const Mag& mag, const RcDesc &rc, GRunArgP &g_arg, bool is_umat)
 {
     switch (rc.shape)
     {
@@ -238,12 +306,26 @@ void writeBack(const Mag& mag, const RcDesc &rc, GRunArgP &g_arg)
         switch (g_arg.index())
         {
             case GRunArgP::index_of<cv::gapi::own::Mat*>() : out_arg_data = util::get<cv::gapi::own::Mat*>(g_arg)->data; break;
+#if !defined(GAPI_STANDALONE)
             case GRunArgP::index_of<cv::Mat*>()            : out_arg_data = util::get<cv::Mat*>(g_arg)->data; break;
+            case GRunArgP::index_of<cv::UMat*>()           : out_arg_data = (util::get<cv::UMat*>(g_arg))->getMat(ACCESS_RW).data; break;
+#endif //  !defined(GAPI_STANDALONE)
             default: util::throw_error(std::logic_error("content type of the runtime argument does not match to resource description ?"));
         }
-
-        auto& in_mag  = mag.template slot<cv::gapi::own::Mat>().at(rc.id);
-        GAPI_Assert((out_arg_data == in_mag.data) && " data for output parameters was reallocated ?");
+        if (is_umat)
+        {
+#if !defined(GAPI_STANDALONE)
+            auto& in_mag = mag.template slot<cv::UMat>().at(rc.id);
+            GAPI_Assert((out_arg_data == (in_mag.getMat(ACCESS_RW).data)) && " data for output parameters was reallocated ?");
+#else
+            util::throw_error(std::logic_error("UMat is not supported in standalone build"));
+#endif // !defined(GAPI_STANDALONE)
+        }
+        else
+        {
+            auto& in_mag = mag.template slot<cv::gapi::own::Mat>().at(rc.id);
+            GAPI_Assert((out_arg_data == in_mag.data) && " data for output parameters was reallocated ?");
+        }
         break;
     }
 
@@ -252,7 +334,9 @@ void writeBack(const Mag& mag, const RcDesc &rc, GRunArgP &g_arg)
         switch (g_arg.index())
         {
             case GRunArgP::index_of<cv::gapi::own::Scalar*>() : *util::get<cv::gapi::own::Scalar*>(g_arg) = mag.template slot<cv::gapi::own::Scalar>().at(rc.id); break;
+#if !defined(GAPI_STANDALONE)
             case GRunArgP::index_of<cv::Scalar*>()            : *util::get<cv::Scalar*>(g_arg) = cv::gapi::own::to_ocv(mag.template slot<cv::gapi::own::Scalar>().at(rc.id)); break;
+#endif //  !defined(GAPI_STANDALONE)
             default: util::throw_error(std::logic_error("content type of the runtime argument does not match to resource description ?"));
         }
         break;

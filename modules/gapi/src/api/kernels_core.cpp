@@ -5,6 +5,8 @@
 // Copyright (C) 2018 Intel Corporation
 
 
+#include "precomp.hpp"
+
 #include "opencv2/gapi/gcall.hpp"
 #include "opencv2/gapi/gscalar.hpp"
 #include "opencv2/gapi/gkernel.hpp"
@@ -100,6 +102,11 @@ std::tuple<GMat, GMat> cartToPolar(const GMat& x, const GMat& y,
                                    bool angleInDegrees)
 {
     return core::GCartToPolar::on(x, y, angleInDegrees);
+}
+
+GMat phase(const GMat &x, const GMat &y, bool angleInDegrees)
+{
+    return core::GPhase::on(x, y, angleInDegrees);
 }
 
 GMat cmpGT(const GMat& src1, const GMat& src2)
@@ -341,6 +348,17 @@ GMat LUT(const GMat& src, const Mat& lut)
 GMat convertTo(const GMat& m, int rtype, double alpha, double beta)
 {
     return core::GConvertTo::on(m, rtype, alpha, beta);
+}
+
+GMat sqrt(const GMat& src)
+{
+    return core::GSqrt::on(src);
+}
+
+GMat normalize(const GMat& _src, double a, double b,
+               int norm_type, int ddepth)
+{
+    return core::GNormalize::on(_src, a, b, norm_type, ddepth);
 }
 
 } //namespace gapi

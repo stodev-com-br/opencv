@@ -46,7 +46,10 @@
 #include "opencv2/core.hpp"
 
 /**
-  @defgroup imgproc Image processing
+  @defgroup imgproc Image Processing
+
+This module includes image-processing functions.
+
   @{
     @defgroup imgproc_filter Image Filtering
 
@@ -148,6 +151,7 @@ case, the color[3] is simply copied to the repainted pixels. Thus, if you want t
 semi-transparent shapes, you can paint them in a separate buffer and then blend it with the main
 image.
 
+    @defgroup imgproc_color_conversions Color Space Conversions
     @defgroup imgproc_colormap ColorMaps in OpenCV
 
 The human perception isn't built for observing fine changes in grayscale images. Human eyes are more
@@ -199,6 +203,10 @@ namespace cv
 
 //! @addtogroup imgproc_filter
 //! @{
+
+enum SpecialFilter {
+    FILTER_SCHARR = -1
+};
 
 //! type of morphological operation
 enum MorphTypes{
@@ -329,12 +337,6 @@ enum AdaptiveThresholdTypes {
     ADAPTIVE_THRESH_GAUSSIAN_C = 1
 };
 
-//! cv::undistort mode
-enum UndistortTypes {
-       PROJ_SPHERICAL_ORTHO  = 0,
-       PROJ_SPHERICAL_EQRECT = 1
-     };
-
 //! class of the pixel in GrabCut algorithm
 enum GrabCutClasses {
     GC_BGD    = 0,  //!< an obvious background pixels
@@ -450,6 +452,9 @@ enum ShapeMatchModes {
 
 //! @} imgproc_shape
 
+//! @addtogroup imgproc_feature
+//! @{
+
 //! Variants of a Hough transform
 enum HoughModes {
 
@@ -470,13 +475,14 @@ enum HoughModes {
 };
 
 //! Variants of Line Segment %Detector
-//! @ingroup imgproc_feature
 enum LineSegmentDetectorModes {
     LSD_REFINE_NONE = 0, //!< No refinement applied
     LSD_REFINE_STD  = 1, //!< Standard refinement is applied. E.g. breaking arches into smaller straighter line approximations.
     LSD_REFINE_ADV  = 2  //!< Advanced refinement. Number of false alarms is calculated, lines are
                          //!< refined through increase of precision, decrement in size, etc.
 };
+
+//! @} imgproc_feature
 
 /** Histogram comparison methods
   @ingroup imgproc_hist
@@ -508,9 +514,9 @@ enum HistCompMethods {
     HISTCMP_KL_DIV        = 5
 };
 
-/** the color conversion code
+/** the color conversion codes
 @see @ref imgproc_color_conversions
-@ingroup imgproc_misc
+@ingroup imgproc_color_conversions
  */
 enum ColorConversionCodes {
     COLOR_BGR2BGRA     = 0, //!< add alpha channel to RGB or BGR image
@@ -595,7 +601,7 @@ enum ColorConversionCodes {
     COLOR_HLS2BGR      = 60,
     COLOR_HLS2RGB      = 61,
 
-    COLOR_BGR2HSV_FULL = 66, //!<
+    COLOR_BGR2HSV_FULL = 66,
     COLOR_RGB2HSV_FULL = 67,
     COLOR_BGR2HLS_FULL = 68,
     COLOR_RGB2HLS_FULL = 69,
@@ -779,15 +785,15 @@ enum ColorConversionCodes {
     COLOR_COLORCVT_MAX  = 143
 };
 
-/** types of intersection between rectangles
-@ingroup imgproc_shape
-*/
+//! @addtogroup imgproc_shape
+//! @{
+
+//! types of intersection between rectangles
 enum RectanglesIntersectTypes {
     INTERSECT_NONE = 0, //!< No intersection
     INTERSECT_PARTIAL  = 1, //!< There is a partial intersection
     INTERSECT_FULL  = 2 //!< One of the rectangle is fully enclosed in the other
 };
-
 
 /** types of line
 @ingroup imgproc_draw
@@ -828,7 +834,8 @@ enum MarkerTypes
     MARKER_TRIANGLE_DOWN = 6    //!< A downwards pointing triangle marker shape
 };
 
-//! finds arbitrary template in the grayscale image using Generalized Hough Transform
+/** @brief finds arbitrary template in the grayscale image using Generalized Hough Transform
+*/
 class CV_EXPORTS_W GeneralizedHough : public Algorithm
 {
 public:
@@ -861,8 +868,10 @@ public:
     CV_WRAP virtual int getMaxBufferSize() const = 0;
 };
 
-//! Ballard, D.H. (1981). Generalizing the Hough transform to detect arbitrary shapes. Pattern Recognition 13 (2): 111-122.
-//! Detects position only without translation and rotation
+/** @brief finds arbitrary template in the grayscale image using Generalized Hough Transform
+
+Detects position only without translation and rotation @cite Ballard1981 .
+*/
 class CV_EXPORTS_W GeneralizedHoughBallard : public GeneralizedHough
 {
 public:
@@ -875,8 +884,10 @@ public:
     CV_WRAP virtual int getVotesThreshold() const = 0;
 };
 
-//! Guil, N., González-Linares, J.M. and Zapata, E.L. (1999). Bidimensional shape detection using an invariant approach. Pattern Recognition 32 (6): 1025-1038.
-//! Detects position, translation and rotation
+/** @brief finds arbitrary template in the grayscale image using Generalized Hough Transform
+
+Detects position, translation and rotation @cite Guil1999 .
+*/
 class CV_EXPORTS_W GeneralizedHoughGuil : public GeneralizedHough
 {
 public:
@@ -929,14 +940,19 @@ public:
     virtual int getPosThresh() const = 0;
 };
 
-/** @brief Base class for Contrast Limited Adaptive Histogram Equalization. :
- */
+//! @} imgproc_shape
+
+//! @addtogroup imgproc_hist
+//! @{
+
+/** @brief Base class for Contrast Limited Adaptive Histogram Equalization.
+*/
 class CV_EXPORTS_W CLAHE : public Algorithm
 {
 public:
     /** @brief Equalizes the histogram of a grayscale image using Contrast Limited Adaptive Histogram Equalization.
 
-    @param src Source image with CV_8UC1 type.
+    @param src Source image of type CV_8UC1 or CV_16UC1.
     @param dst Destination image.
      */
     CV_WRAP virtual void apply(InputArray src, OutputArray dst) = 0;
@@ -963,6 +979,7 @@ public:
     CV_WRAP virtual void collectGarbage() = 0;
 };
 
+//! @} imgproc_hist
 
 //! @addtogroup imgproc_subdiv2d
 //! @{
@@ -1231,14 +1248,12 @@ protected:
 //! @addtogroup imgproc_feature
 //! @{
 
-/** @example samples/cpp/lsd_lines.cpp
-An example using the LineSegmentDetector
-\image html building_lsd.png "Sample output image" width=434 height=300
-*/
-
 /** @brief Line segment detector class
 
 following the algorithm described at @cite Rafael12 .
+
+@note Implementation has been removed due original code license conflict
+
 */
 class CV_EXPORTS_W LineSegmentDetector : public Algorithm
 {
@@ -1302,6 +1317,8 @@ to edit those, as to tailor it for their own application.
 is chosen.
 @param _density_th Minimal density of aligned region points in the enclosing rectangle.
 @param _n_bins Number of bins in pseudo-ordering of gradient modulus.
+
+@note Implementation has been removed due original code license conflict
  */
 CV_EXPORTS_W Ptr<LineSegmentDetector> createLineSegmentDetector(
     int _refine = LSD_REFINE_STD, double _scale = 0.8,
@@ -1336,14 +1353,14 @@ CV_EXPORTS_W Mat getGaussianKernel( int ksize, double sigma, int ktype = CV_64F 
 /** @brief Returns filter coefficients for computing spatial image derivatives.
 
 The function computes and returns the filter coefficients for spatial image derivatives. When
-`ksize=CV_SCHARR`, the Scharr \f$3 \times 3\f$ kernels are generated (see #Scharr). Otherwise, Sobel
+`ksize=FILTER_SCHARR`, the Scharr \f$3 \times 3\f$ kernels are generated (see #Scharr). Otherwise, Sobel
 kernels are generated (see #Sobel). The filters are normally passed to #sepFilter2D or to
 
 @param kx Output matrix of row filter coefficients. It has the type ktype .
 @param ky Output matrix of column filter coefficients. It has the type ktype .
 @param dx Derivative order in respect of x.
 @param dy Derivative order in respect of y.
-@param ksize Aperture size. It can be CV_SCHARR, 1, 3, 5, or 7.
+@param ksize Aperture size. It can be FILTER_SCHARR, 1, 3, 5, or 7.
 @param normalize Flag indicating whether to normalize (scale down) the filter coefficients or not.
 Theoretically, the coefficients should have the denominator \f$=2^{ksize*2-dx-dy-2}\f$. If you are
 going to filter floating-point images, you are likely to use the normalized kernels. But if you
@@ -1504,8 +1521,8 @@ pixel values which overlap the filter placed over the pixel \f$ (x, y) \f$.
 The unnormalized square box filter can be useful in computing local image statistics such as the the local
 variance and standard deviation around the neighborhood of a pixel.
 
-@param _src input image
-@param _dst output image of the same size and type as _src
+@param src input image
+@param dst output image of the same size and type as _src
 @param ddepth the output image depth (-1 to use src.depth())
 @param ksize kernel size
 @param anchor kernel anchor point. The default value of Point(-1, -1) denotes that the anchor is at the kernel
@@ -1514,7 +1531,7 @@ center.
 @param borderType border mode used to extrapolate pixels outside of the image, see #BorderTypes
 @sa boxFilter
 */
-CV_EXPORTS_W void sqrBoxFilter( InputArray _src, OutputArray _dst, int ddepth,
+CV_EXPORTS_W void sqrBoxFilter( InputArray src, OutputArray dst, int ddepth,
                                 Size ksize, Point anchor = Point(-1, -1),
                                 bool normalize = true,
                                 int borderType = BORDER_DEFAULT );
@@ -1610,7 +1627,7 @@ calculate the derivative. When \f$\texttt{ksize = 1}\f$, the \f$3 \times 1\f$ or
 kernel is used (that is, no Gaussian smoothing is done). `ksize = 1` can only be used for the first
 or the second x- or y- derivatives.
 
-There is also the special value `ksize = #CV_SCHARR (-1)` that corresponds to the \f$3\times3\f$ Scharr
+There is also the special value `ksize = #FILTER_SCHARR (-1)` that corresponds to the \f$3\times3\f$ Scharr
 filter that may give more accurate results than the \f$3\times3\f$ Sobel. The Scharr aperture is
 
 \f[\vecthreethree{-3}{0}{3}{-10}{0}{10}{-3}{0}{3}\f]
@@ -1681,7 +1698,7 @@ call
 
 is equivalent to
 
-\f[\texttt{Sobel(src, dst, ddepth, dx, dy, CV_SCHARR, scale, delta, borderType)} .\f]
+\f[\texttt{Sobel(src, dst, ddepth, dx, dy, FILTER_SCHARR, scale, delta, borderType)} .\f]
 
 @param src input image.
 @param dst output image of the same size and the same number of channels as src.
@@ -2977,193 +2994,6 @@ CV_EXPORTS void buildPyramid( InputArray src, OutputArrayOfArrays dst,
 
 //! @} imgproc_filter
 
-//! @addtogroup imgproc_transform
-//! @{
-
-/** @brief Transforms an image to compensate for lens distortion.
-
-The function transforms an image to compensate radial and tangential lens distortion.
-
-The function is simply a combination of #initUndistortRectifyMap (with unity R ) and #remap
-(with bilinear interpolation). See the former function for details of the transformation being
-performed.
-
-Those pixels in the destination image, for which there is no correspondent pixels in the source
-image, are filled with zeros (black color).
-
-A particular subset of the source image that will be visible in the corrected image can be regulated
-by newCameraMatrix. You can use #getOptimalNewCameraMatrix to compute the appropriate
-newCameraMatrix depending on your requirements.
-
-The camera matrix and the distortion parameters can be determined using #calibrateCamera. If
-the resolution of images is different from the resolution used at the calibration stage, \f$f_x,
-f_y, c_x\f$ and \f$c_y\f$ need to be scaled accordingly, while the distortion coefficients remain
-the same.
-
-@param src Input (distorted) image.
-@param dst Output (corrected) image that has the same size and type as src .
-@param cameraMatrix Input camera matrix \f$A = \vecthreethree{f_x}{0}{c_x}{0}{f_y}{c_y}{0}{0}{1}\f$ .
-@param distCoeffs Input vector of distortion coefficients
-\f$(k_1, k_2, p_1, p_2[, k_3[, k_4, k_5, k_6[, s_1, s_2, s_3, s_4[, \tau_x, \tau_y]]]])\f$
-of 4, 5, 8, 12 or 14 elements. If the vector is NULL/empty, the zero distortion coefficients are assumed.
-@param newCameraMatrix Camera matrix of the distorted image. By default, it is the same as
-cameraMatrix but you may additionally scale and shift the result by using a different matrix.
- */
-CV_EXPORTS_W void undistort( InputArray src, OutputArray dst,
-                             InputArray cameraMatrix,
-                             InputArray distCoeffs,
-                             InputArray newCameraMatrix = noArray() );
-
-/** @brief Computes the undistortion and rectification transformation map.
-
-The function computes the joint undistortion and rectification transformation and represents the
-result in the form of maps for remap. The undistorted image looks like original, as if it is
-captured with a camera using the camera matrix =newCameraMatrix and zero distortion. In case of a
-monocular camera, newCameraMatrix is usually equal to cameraMatrix, or it can be computed by
-#getOptimalNewCameraMatrix for a better control over scaling. In case of a stereo camera,
-newCameraMatrix is normally set to P1 or P2 computed by #stereoRectify .
-
-Also, this new camera is oriented differently in the coordinate space, according to R. That, for
-example, helps to align two heads of a stereo camera so that the epipolar lines on both images
-become horizontal and have the same y- coordinate (in case of a horizontally aligned stereo camera).
-
-The function actually builds the maps for the inverse mapping algorithm that is used by remap. That
-is, for each pixel \f$(u, v)\f$ in the destination (corrected and rectified) image, the function
-computes the corresponding coordinates in the source image (that is, in the original image from
-camera). The following process is applied:
-\f[
-\begin{array}{l}
-x  \leftarrow (u - {c'}_x)/{f'}_x  \\
-y  \leftarrow (v - {c'}_y)/{f'}_y  \\
-{[X\,Y\,W]} ^T  \leftarrow R^{-1}*[x \, y \, 1]^T  \\
-x'  \leftarrow X/W  \\
-y'  \leftarrow Y/W  \\
-r^2  \leftarrow x'^2 + y'^2 \\
-x''  \leftarrow x' \frac{1 + k_1 r^2 + k_2 r^4 + k_3 r^6}{1 + k_4 r^2 + k_5 r^4 + k_6 r^6}
-+ 2p_1 x' y' + p_2(r^2 + 2 x'^2)  + s_1 r^2 + s_2 r^4\\
-y''  \leftarrow y' \frac{1 + k_1 r^2 + k_2 r^4 + k_3 r^6}{1 + k_4 r^2 + k_5 r^4 + k_6 r^6}
-+ p_1 (r^2 + 2 y'^2) + 2 p_2 x' y' + s_3 r^2 + s_4 r^4 \\
-s\vecthree{x'''}{y'''}{1} =
-\vecthreethree{R_{33}(\tau_x, \tau_y)}{0}{-R_{13}((\tau_x, \tau_y)}
-{0}{R_{33}(\tau_x, \tau_y)}{-R_{23}(\tau_x, \tau_y)}
-{0}{0}{1} R(\tau_x, \tau_y) \vecthree{x''}{y''}{1}\\
-map_x(u,v)  \leftarrow x''' f_x + c_x  \\
-map_y(u,v)  \leftarrow y''' f_y + c_y
-\end{array}
-\f]
-where \f$(k_1, k_2, p_1, p_2[, k_3[, k_4, k_5, k_6[, s_1, s_2, s_3, s_4[, \tau_x, \tau_y]]]])\f$
-are the distortion coefficients.
-
-In case of a stereo camera, this function is called twice: once for each camera head, after
-stereoRectify, which in its turn is called after #stereoCalibrate. But if the stereo camera
-was not calibrated, it is still possible to compute the rectification transformations directly from
-the fundamental matrix using #stereoRectifyUncalibrated. For each camera, the function computes
-homography H as the rectification transformation in a pixel domain, not a rotation matrix R in 3D
-space. R can be computed from H as
-\f[\texttt{R} = \texttt{cameraMatrix} ^{-1} \cdot \texttt{H} \cdot \texttt{cameraMatrix}\f]
-where cameraMatrix can be chosen arbitrarily.
-
-@param cameraMatrix Input camera matrix \f$A=\vecthreethree{f_x}{0}{c_x}{0}{f_y}{c_y}{0}{0}{1}\f$ .
-@param distCoeffs Input vector of distortion coefficients
-\f$(k_1, k_2, p_1, p_2[, k_3[, k_4, k_5, k_6[, s_1, s_2, s_3, s_4[, \tau_x, \tau_y]]]])\f$
-of 4, 5, 8, 12 or 14 elements. If the vector is NULL/empty, the zero distortion coefficients are assumed.
-@param R Optional rectification transformation in the object space (3x3 matrix). R1 or R2 ,
-computed by #stereoRectify can be passed here. If the matrix is empty, the identity transformation
-is assumed. In cvInitUndistortMap R assumed to be an identity matrix.
-@param newCameraMatrix New camera matrix \f$A'=\vecthreethree{f_x'}{0}{c_x'}{0}{f_y'}{c_y'}{0}{0}{1}\f$.
-@param size Undistorted image size.
-@param m1type Type of the first output map that can be CV_32FC1, CV_32FC2 or CV_16SC2, see #convertMaps
-@param map1 The first output map.
-@param map2 The second output map.
- */
-CV_EXPORTS_W void initUndistortRectifyMap( InputArray cameraMatrix, InputArray distCoeffs,
-                           InputArray R, InputArray newCameraMatrix,
-                           Size size, int m1type, OutputArray map1, OutputArray map2 );
-
-//! initializes maps for #remap for wide-angle
-CV_EXPORTS_W float initWideAngleProjMap( InputArray cameraMatrix, InputArray distCoeffs,
-                                         Size imageSize, int destImageWidth,
-                                         int m1type, OutputArray map1, OutputArray map2,
-                                         int projType = PROJ_SPHERICAL_EQRECT, double alpha = 0);
-
-/** @brief Returns the default new camera matrix.
-
-The function returns the camera matrix that is either an exact copy of the input cameraMatrix (when
-centerPrinicipalPoint=false ), or the modified one (when centerPrincipalPoint=true).
-
-In the latter case, the new camera matrix will be:
-
-\f[\begin{bmatrix} f_x && 0 && ( \texttt{imgSize.width} -1)*0.5  \\ 0 && f_y && ( \texttt{imgSize.height} -1)*0.5  \\ 0 && 0 && 1 \end{bmatrix} ,\f]
-
-where \f$f_x\f$ and \f$f_y\f$ are \f$(0,0)\f$ and \f$(1,1)\f$ elements of cameraMatrix, respectively.
-
-By default, the undistortion functions in OpenCV (see #initUndistortRectifyMap, #undistort) do not
-move the principal point. However, when you work with stereo, it is important to move the principal
-points in both views to the same y-coordinate (which is required by most of stereo correspondence
-algorithms), and may be to the same x-coordinate too. So, you can form the new camera matrix for
-each view where the principal points are located at the center.
-
-@param cameraMatrix Input camera matrix.
-@param imgsize Camera view image size in pixels.
-@param centerPrincipalPoint Location of the principal point in the new camera matrix. The
-parameter indicates whether this location should be at the image center or not.
- */
-CV_EXPORTS_W Mat getDefaultNewCameraMatrix( InputArray cameraMatrix, Size imgsize = Size(),
-                                            bool centerPrincipalPoint = false );
-
-/** @brief Computes the ideal point coordinates from the observed point coordinates.
-
-The function is similar to #undistort and #initUndistortRectifyMap but it operates on a
-sparse set of points instead of a raster image. Also the function performs a reverse transformation
-to projectPoints. In case of a 3D object, it does not reconstruct its 3D coordinates, but for a
-planar object, it does, up to a translation vector, if the proper R is specified.
-
-For each observed point coordinate \f$(u, v)\f$ the function computes:
-\f[
-\begin{array}{l}
-x^{"}  \leftarrow (u - c_x)/f_x  \\
-y^{"}  \leftarrow (v - c_y)/f_y  \\
-(x',y') = undistort(x^{"},y^{"}, \texttt{distCoeffs}) \\
-{[X\,Y\,W]} ^T  \leftarrow R*[x' \, y' \, 1]^T  \\
-x  \leftarrow X/W  \\
-y  \leftarrow Y/W  \\
-\text{only performed if P is specified:} \\
-u'  \leftarrow x {f'}_x + {c'}_x  \\
-v'  \leftarrow y {f'}_y + {c'}_y
-\end{array}
-\f]
-
-where *undistort* is an approximate iterative algorithm that estimates the normalized original
-point coordinates out of the normalized distorted point coordinates ("normalized" means that the
-coordinates do not depend on the camera matrix).
-
-The function can be used for both a stereo camera head or a monocular camera (when R is empty).
-
-@param src Observed point coordinates, 1xN or Nx1 2-channel (CV_32FC2 or CV_64FC2).
-@param dst Output ideal point coordinates after undistortion and reverse perspective
-transformation. If matrix P is identity or omitted, dst will contain normalized point coordinates.
-@param cameraMatrix Camera matrix \f$\vecthreethree{f_x}{0}{c_x}{0}{f_y}{c_y}{0}{0}{1}\f$ .
-@param distCoeffs Input vector of distortion coefficients
-\f$(k_1, k_2, p_1, p_2[, k_3[, k_4, k_5, k_6[, s_1, s_2, s_3, s_4[, \tau_x, \tau_y]]]])\f$
-of 4, 5, 8, 12 or 14 elements. If the vector is NULL/empty, the zero distortion coefficients are assumed.
-@param R Rectification transformation in the object space (3x3 matrix). R1 or R2 computed by
-#stereoRectify can be passed here. If the matrix is empty, the identity transformation is used.
-@param P New camera matrix (3x3) or new projection matrix (3x4) \f$\begin{bmatrix} {f'}_x & 0 & {c'}_x & t_x \\ 0 & {f'}_y & {c'}_y & t_y \\ 0 & 0 & 1 & t_z \end{bmatrix}\f$. P1 or P2 computed by
-#stereoRectify can be passed here. If the matrix is empty, the identity new camera matrix is used.
- */
-CV_EXPORTS_W void undistortPoints( InputArray src, OutputArray dst,
-                                   InputArray cameraMatrix, InputArray distCoeffs,
-                                   InputArray R = noArray(), InputArray P = noArray());
-/** @overload
-    @note Default version of #undistortPoints does 5 iterations to compute undistorted points.
-
- */
-CV_EXPORTS_AS(undistortPointsIter) void undistortPoints( InputArray src, OutputArray dst,
-                                   InputArray cameraMatrix, InputArray distCoeffs,
-                                   InputArray R, InputArray P, TermCriteria criteria);
-
-//! @} imgproc_transform
-
 //! @addtogroup imgproc_hist
 //! @{
 
@@ -3319,6 +3149,14 @@ The algorithm normalizes the brightness and increases the contrast of the image.
 @param dst Destination image of the same size and type as src .
  */
 CV_EXPORTS_W void equalizeHist( InputArray src, OutputArray dst );
+
+/** @brief Creates a smart pointer to a cv::CLAHE class and initializes it.
+
+@param clipLimit Threshold for contrast limiting.
+@param tileGridSize Size of grid for histogram equalization. Input image will be divided into
+equally sized rectangular tiles. tileGridSize defines the number of tiles in row and column.
+ */
+CV_EXPORTS_W Ptr<CLAHE> createCLAHE(double clipLimit = 40.0, Size tileGridSize = Size(8, 8));
 
 /** @brief Computes the "minimal work" distance between two weighted point configurations.
 
@@ -3635,6 +3473,20 @@ CV_EXPORTS_W int floodFill( InputOutputArray image, InputOutputArray mask,
                             Scalar loDiff = Scalar(), Scalar upDiff = Scalar(),
                             int flags = 4 );
 
+//! Performs linear blending of two images:
+//! \f[ \texttt{dst}(i,j) = \texttt{weights1}(i,j)*\texttt{src1}(i,j) + \texttt{weights2}(i,j)*\texttt{src2}(i,j) \f]
+//! @param src1 It has a type of CV_8UC(n) or CV_32FC(n), where n is a positive integer.
+//! @param src2 It has the same type and size as src1.
+//! @param weights1 It has a type of CV_32FC1 and the same size with src1.
+//! @param weights2 It has a type of CV_32FC1 and the same size with src1.
+//! @param dst It is created if it does not have the same size and type with src1.
+CV_EXPORTS void blendLinear(InputArray src1, InputArray src2, InputArray weights1, InputArray weights2, OutputArray dst);
+
+//! @} imgproc_misc
+
+//! @addtogroup imgproc_color_conversions
+//! @{
+
 /** @brief Converts an image from one color space to another.
 
 The function converts an input image from one color space to another. In case of a transformation
@@ -3678,12 +3530,59 @@ channels is derived automatically from src and code.
  */
 CV_EXPORTS_W void cvtColor( InputArray src, OutputArray dst, int code, int dstCn = 0 );
 
+/** @brief Converts an image from one color space to another where the source image is
+stored in two planes.
+
+This function only supports YUV420 to RGB conversion as of now.
+
+@param src1: 8-bit image (#CV_8U) of the Y plane.
+@param src2: image containing interleaved U/V plane.
+@param dst: output image.
+@param code: Specifies the type of conversion. It can take any of the following values:
+- #COLOR_YUV2BGR_NV12
+- #COLOR_YUV2RGB_NV12
+- #COLOR_YUV2BGRA_NV12
+- #COLOR_YUV2RGBA_NV12
+- #COLOR_YUV2BGR_NV21
+- #COLOR_YUV2RGB_NV21
+- #COLOR_YUV2BGRA_NV21
+- #COLOR_YUV2RGBA_NV21
+*/
 CV_EXPORTS_W void cvtColorTwoPlane( InputArray src1, InputArray src2, OutputArray dst, int code );
 
-//! @} imgproc_misc
+/** @brief main function for all demosaicing processes
 
-// main function for all demosaicing processes
-CV_EXPORTS_W void demosaicing(InputArray _src, OutputArray _dst, int code, int dcn = 0);
+@param src input image: 8-bit unsigned or 16-bit unsigned.
+@param dst output image of the same size and depth as src.
+@param code Color space conversion code (see the description below).
+@param dstCn number of channels in the destination image; if the parameter is 0, the number of the
+channels is derived automatically from src and code.
+
+The function can do the following transformations:
+
+-   Demosaicing using bilinear interpolation
+
+    #COLOR_BayerBG2BGR , #COLOR_BayerGB2BGR , #COLOR_BayerRG2BGR , #COLOR_BayerGR2BGR
+
+    #COLOR_BayerBG2GRAY , #COLOR_BayerGB2GRAY , #COLOR_BayerRG2GRAY , #COLOR_BayerGR2GRAY
+
+-   Demosaicing using Variable Number of Gradients.
+
+    #COLOR_BayerBG2BGR_VNG , #COLOR_BayerGB2BGR_VNG , #COLOR_BayerRG2BGR_VNG , #COLOR_BayerGR2BGR_VNG
+
+-   Edge-Aware Demosaicing.
+
+    #COLOR_BayerBG2BGR_EA , #COLOR_BayerGB2BGR_EA , #COLOR_BayerRG2BGR_EA , #COLOR_BayerGR2BGR_EA
+
+-   Demosaicing with alpha channel
+
+    #COLOR_BayerBG2BGRA , #COLOR_BayerGB2BGRA , #COLOR_BayerRG2BGRA , #COLOR_BayerGR2BGRA
+
+@sa cvtColor
+*/
+CV_EXPORTS_W void demosaicing(InputArray src, OutputArray dst, int code, int dstCn = 0);
+
+//! @} imgproc_color_conversions
 
 //! @addtogroup imgproc_shape
 //! @{
@@ -3885,12 +3784,12 @@ parent, or nested contours, the corresponding elements of hierarchy[i] will be n
 contours are extracted from the image ROI and then they should be analyzed in the whole image
 context.
  */
-CV_EXPORTS_W void findContours( InputOutputArray image, OutputArrayOfArrays contours,
+CV_EXPORTS_W void findContours( InputArray image, OutputArrayOfArrays contours,
                               OutputArray hierarchy, int mode,
                               int method, Point offset = Point());
 
 /** @overload */
-CV_EXPORTS void findContours( InputOutputArray image, OutputArrayOfArrays contours,
+CV_EXPORTS void findContours( InputArray image, OutputArrayOfArrays contours,
                               int mode, int method, Point offset = Point());
 
 /** @example samples/cpp/squares.cpp
@@ -3929,13 +3828,14 @@ The function computes a curve length or a closed contour perimeter.
  */
 CV_EXPORTS_W double arcLength( InputArray curve, bool closed );
 
-/** @brief Calculates the up-right bounding rectangle of a point set.
+/** @brief Calculates the up-right bounding rectangle of a point set or non-zero pixels of gray-scale image.
 
-The function calculates and returns the minimal up-right bounding rectangle for the specified point set.
+The function calculates and returns the minimal up-right bounding rectangle for the specified point set or
+non-zero pixels of gray-scale image.
 
-@param points Input 2D point set, stored in std::vector or Mat.
+@param array Input gray-scale image or 2D point set, stored in std::vector or Mat.
  */
-CV_EXPORTS_W Rect boundingRect( InputArray points );
+CV_EXPORTS_W Rect boundingRect( InputArray array );
 
 /** @brief Calculates a contour area.
 
@@ -4061,6 +3961,12 @@ vector: std::vector\<int\> implies returnPoints=false, std::vector\<Point\> impl
 returnPoints=true.
 
 @note `points` and `hull` should be different arrays, inplace processing isn't supported.
+
+Check @ref tutorial_hull "the corresponding tutorial" for more details.
+
+useful links:
+
+https://www.learnopencv.com/convex-hull-using-opencv-in-python-and-c/
  */
 CV_EXPORTS_W void convexHull( InputArray points, OutputArray hull,
                               bool clockwise = false, bool returnPoints = true );
@@ -4267,31 +4173,15 @@ at most 8 vertices. Stored as std::vector\<cv::Point2f\> or cv::Mat as Mx1 of ty
  */
 CV_EXPORTS_W int rotatedRectangleIntersection( const RotatedRect& rect1, const RotatedRect& rect2, OutputArray intersectingRegion  );
 
-//! @} imgproc_shape
-/** @brief Creates implementation for cv::CLAHE .
-
-@param clipLimit Threshold for contrast limiting.
-@param tileGridSize Size of grid for histogram equalization. Input image will be divided into
-equally sized rectangular tiles. tileGridSize defines the number of tiles in row and column.
- */
-CV_EXPORTS_W Ptr<CLAHE> createCLAHE(double clipLimit = 40.0, Size tileGridSize = Size(8, 8));
-
-//! Ballard, D.H. (1981). Generalizing the Hough transform to detect arbitrary shapes. Pattern Recognition 13 (2): 111-122.
-//! Detects position only without translation and rotation
+/** @brief Creates a smart pointer to a cv::GeneralizedHoughBallard class and initializes it.
+*/
 CV_EXPORTS Ptr<GeneralizedHoughBallard> createGeneralizedHoughBallard();
 
-//! Guil, N., González-Linares, J.M. and Zapata, E.L. (1999). Bidimensional shape detection using an invariant approach. Pattern Recognition 32 (6): 1025-1038.
-//! Detects position, translation and rotation
+/** @brief Creates a smart pointer to a cv::GeneralizedHoughGuil class and initializes it.
+*/
 CV_EXPORTS Ptr<GeneralizedHoughGuil> createGeneralizedHoughGuil();
 
-//! Performs linear blending of two images:
-//! \f[ \texttt{dst}(i,j) = \texttt{weights1}(i,j)*\texttt{src1}(i,j) + \texttt{weights2}(i,j)*\texttt{src2}(i,j) \f]
-//! @param src1 It has a type of CV_8UC(n) or CV_32FC(n), where n is a positive integer.
-//! @param src2 It has the same type and size as src1.
-//! @param weights1 It has a type of CV_32FC1 and the same size with src1.
-//! @param weights2 It has a type of CV_32FC1 and the same size with src1.
-//! @param dst It is created if it does not have the same size and type with src1.
-CV_EXPORTS void blendLinear(InputArray src1, InputArray src2, InputArray weights1, InputArray weights2, OutputArray dst);
+//! @} imgproc_shape
 
 //! @addtogroup imgproc_colormap
 //! @{
@@ -4311,7 +4201,14 @@ enum ColormapTypes
     COLORMAP_HSV = 9, //!< ![HSV](pics/colormaps/colorscale_hsv.jpg)
     COLORMAP_PINK = 10, //!< ![pink](pics/colormaps/colorscale_pink.jpg)
     COLORMAP_HOT = 11, //!< ![hot](pics/colormaps/colorscale_hot.jpg)
-    COLORMAP_PARULA = 12 //!< ![parula](pics/colormaps/colorscale_parula.jpg)
+    COLORMAP_PARULA = 12, //!< ![parula](pics/colormaps/colorscale_parula.jpg)
+    COLORMAP_MAGMA = 13, //!< ![magma](pics/colormaps/colorscale_magma.jpg)
+    COLORMAP_INFERNO = 14, //!< ![inferno](pics/colormaps/colorscale_inferno.jpg)
+    COLORMAP_PLASMA = 15, //!< ![plasma](pics/colormaps/colorscale_plasma.jpg)
+    COLORMAP_VIRIDIS = 16, //!< ![viridis](pics/colormaps/colorscale_viridis.jpg)
+    COLORMAP_CIVIDIS = 17, //!< ![cividis](pics/colormaps/colorscale_cividis.jpg)
+    COLORMAP_TWILIGHT = 18, //!< ![twilight](pics/colormaps/colorscale_twilight.jpg)
+    COLORMAP_TWILIGHT_SHIFTED = 19 //!< ![twilight shifted](pics/colormaps/colorscale_twilight_shifted.jpg)
 };
 
 /** @example samples/cpp/falsecolor.cpp
@@ -4492,7 +4389,7 @@ CV_EXPORTS_W void drawMarker(InputOutputArray img, Point position, const Scalar&
 /* ----------------------------------------------------------------------------------------- */
 
 /** @overload */
-CV_EXPORTS void fillConvexPoly(Mat& img, const Point* pts, int npts,
+CV_EXPORTS void fillConvexPoly(InputOutputArray img, const Point* pts, int npts,
                                const Scalar& color, int lineType = LINE_8,
                                int shift = 0);
 
@@ -4514,7 +4411,7 @@ CV_EXPORTS_W void fillConvexPoly(InputOutputArray img, InputArray points,
                                  int shift = 0);
 
 /** @overload */
-CV_EXPORTS void fillPoly(Mat& img, const Point** pts,
+CV_EXPORTS void fillPoly(InputOutputArray img, const Point** pts,
                          const int* npts, int ncontours,
                          const Scalar& color, int lineType = LINE_8, int shift = 0,
                          Point offset = Point() );
@@ -4542,7 +4439,7 @@ CV_EXPORTS_W void fillPoly(InputOutputArray img, InputArrayOfArrays pts,
                            Point offset = Point() );
 
 /** @overload */
-CV_EXPORTS void polylines(Mat& img, const Point* const* pts, const int* npts,
+CV_EXPORTS void polylines(InputOutputArray img, const Point* const* pts, const int* npts,
                           int ncontours, bool isClosed, const Scalar& color,
                           int thickness = 1, int lineType = LINE_8, int shift = 0 );
 
@@ -4769,7 +4666,7 @@ LineIterator it2 = it;
 vector<Vec3b> buf(it.count);
 
 for(int i = 0; i < it.count; i++, ++it)
-    buf[i] = *(const Vec3b)*it;
+    buf[i] = *(const Vec3b*)*it;
 
 // alternative way of iterating through the line
 for(int i = 0; i < it2.count; i++, ++it2)
@@ -4792,7 +4689,15 @@ public:
     not to depend on the ordering of pt1 and pt2 parameters
     */
     LineIterator( const Mat& img, Point pt1, Point pt2,
-                  int connectivity = 8, bool leftToRight = false );
+                  int connectivity = 8, bool leftToRight = false ) {
+      init(img.size(), img.type(), (uchar*)img.ptr(), img.step1()*img.elemSize1(), pt1, pt2, connectivity, leftToRight);
+    }
+    LineIterator( const Size& size, int type, Point pt1, Point pt2,
+                  int connectivity = 8, bool leftToRight = false ) {
+      init(size, type, 0, CV_ELEM_SIZE(type)*size.width, pt1, pt2, connectivity, leftToRight);
+    }
+    void init(const Size& size, int type, uchar* data, size_t dataStep, Point pt1, Point pt2, int connectivity = 8, bool leftToRight = false);
+
     /** @brief returns pointer to the current pixel
     */
     uchar* operator *();
@@ -4821,7 +4726,7 @@ public:
 inline
 uchar* LineIterator::operator *()
 {
-    return ptr;
+    return !ptr0 ? 0 : ptr;//when no Mat is attached, ptr is just a dummy address and should not be dereferenced
 }
 
 inline

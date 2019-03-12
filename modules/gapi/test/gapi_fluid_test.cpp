@@ -50,13 +50,15 @@ TEST(FluidBuffer, InputTest)
     const cv::Size buffer_size = {8,8};
     cv::Mat in_mat = cv::Mat::eye(buffer_size, CV_8U);
 
-    cv::gapi::fluid::Buffer buffer(in_mat, true);
-    cv::gapi::fluid::View  view = buffer.mkView(1, 0, {}, false);
+    cv::gapi::fluid::Buffer buffer(to_own(in_mat), true);
+    cv::gapi::fluid::View  view = buffer.mkView(0, false);
+    view.priv().allocate(1, {});
     view.priv().reset(1);
     int this_y = 0;
 
     while (this_y < buffer_size.height)
     {
+        view.priv().prepareToRead();
         const uint8_t* rrow = view.InLine<uint8_t>(0);
         ReadFunction1x1(rrow, buffer_size.width);
         view.priv().readDone(1,1);
@@ -74,8 +76,9 @@ TEST(FluidBuffer, CircularTest)
 
     cv::gapi::fluid::Buffer buffer(cv::GMatDesc{CV_8U,1,buffer_size}, 3, 1, 0, 1,
         util::make_optional(cv::gapi::fluid::Border{cv::BORDER_CONSTANT, cv::gapi::own::Scalar(255)}));
-    cv::gapi::fluid::View view = buffer.mkView(3, 1, {}, false);
+    cv::gapi::fluid::View view = buffer.mkView(1, {});
     view.priv().reset(3);
+    view.priv().allocate(3, {});
     buffer.debug(std::cout);
 
     const auto whole_line_is = [](const uint8_t *line, int len, int value)
@@ -152,7 +155,7 @@ TEST(FluidBuffer, OutputTest)
     const cv::Size buffer_size = {8,16};
     cv::Mat out_mat = cv::Mat(buffer_size, CV_8U);
 
-    cv::gapi::fluid::Buffer buffer(out_mat, false);
+    cv::gapi::fluid::Buffer buffer(to_own(out_mat), false);
     int num_writes = 0;
     while (num_writes < buffer_size.height)
     {
@@ -417,7 +420,7 @@ TEST(Fluid, MultipleReaders_DifferentLatency)
     EXPECT_EQ(0, cv::countNonZero(out_mat_gapi != out_mat_ocv));
 }
 
-TEST(Fluid, DISABLED_MultipleOutputs)
+TEST(Fluid, MultipleOutputs)
 {
     // in -> AddC -> a -> AddC ------------------> out1
     //               `--> Id7x7  --> b --> AddC -> out2
@@ -464,7 +467,7 @@ TEST(Fluid, EmptyOutputMatTest)
 }
 
 struct LPISequenceTest : public TestWithParam<int>{};
-TEST_P(LPISequenceTest, DISABLED_LPISequenceTest)
+TEST_P(LPISequenceTest, LPISequenceTest)
 {
     // in -> AddC -> a -> Blur (2lpi) -> out
 
@@ -706,5 +709,47 @@ TEST(FluidTwoIslands, SanityTest)
     EXPECT_EQ(0, countNonZero(in_mat1 != out_mat1));
     EXPECT_EQ(0, countNonZero(in_mat2 != out_mat2));
 }
+
+struct NV12RoiTest : public TestWithParam <std::pair<cv::Size, cv::Rect>> {};
+TEST_P(NV12RoiTest, Test)
+{
+    cv::Size y_sz;
+    cv::Rect roi;
+    std::tie(y_sz, roi) = GetParam();
+
+    cv::Size uv_sz(y_sz.width / 2, y_sz.height / 2);
+    cv::Size in_sz(y_sz.width, y_sz.height*3/2);
+
+    cv::Mat in_mat = cv::Mat(in_sz, CV_8UC1);
+
+    cv::Scalar mean   = cv::Scalar(127.0f);
+    cv::Scalar stddev = cv::Scalar(40.f);
+    cv::randn(in_mat, mean, stddev);
+
+    cv::Mat y_mat  = cv::Mat(y_sz, CV_8UC1, in_mat.data);
+    cv::Mat uv_mat = cv::Mat(uv_sz, CV_8UC2, in_mat.data + in_mat.step1() * y_sz.height);
+    cv::Mat out_mat, out_mat_ocv;
+
+    cv::GMat y, uv;
+    auto rgb = cv::gapi::NV12toRGB(y, uv);
+    cv::GComputation c(cv::GIn(y, uv), cv::GOut(rgb));
+
+    c.apply(cv::gin(y_mat, uv_mat), cv::gout(out_mat), cv::compile_args(fluidTestPackage, cv::GFluidOutputRois{{to_own(roi)}}));
+
+    cv::cvtColor(in_mat, out_mat_ocv, cv::COLOR_YUV2RGB_NV12);
+
+    EXPECT_EQ(0, cv::countNonZero(out_mat(roi) != out_mat_ocv(roi)));
+}
+
+INSTANTIATE_TEST_CASE_P(Fluid, NV12RoiTest,
+                        Values(std::make_pair(cv::Size{8, 8}, cv::Rect{0, 0, 8, 2})
+                              ,std::make_pair(cv::Size{8, 8}, cv::Rect{0, 2, 8, 2})
+                              ,std::make_pair(cv::Size{8, 8}, cv::Rect{0, 4, 8, 2})
+                              ,std::make_pair(cv::Size{8, 8}, cv::Rect{0, 6, 8, 2})
+                              ,std::make_pair(cv::Size{1920, 1080}, cv::Rect{0,   0, 1920, 270})
+                              ,std::make_pair(cv::Size{1920, 1080}, cv::Rect{0, 270, 1920, 270})
+                              ,std::make_pair(cv::Size{1920, 1080}, cv::Rect{0, 540, 1920, 270})
+                              ,std::make_pair(cv::Size{1920, 1080}, cv::Rect{0, 710, 1920, 270})
+                              ));
 
 } // namespace opencv_test

@@ -125,7 +125,50 @@ video = {'': ['CamShift', 'calcOpticalFlowFarneback', 'calcOpticalFlowPyrLK', 'c
          'BackgroundSubtractor': ['apply', 'getBackgroundImage']}
 
 dnn = {'dnn_Net': ['setInput', 'forward'],
-       '': ['readNetFromCaffe', 'readNetFromTensorflow', 'readNetFromTorch', 'readNetFromDarknet', 'blobFromImage']}
+       '': ['readNetFromCaffe', 'readNetFromTensorflow', 'readNetFromTorch', 'readNetFromDarknet',
+            'readNetFromONNX', 'readNet', 'blobFromImage']}
+
+features2d = {'Feature2D': ['detect', 'compute', 'detectAndCompute', 'descriptorSize', 'descriptorType', 'defaultNorm', 'empty', 'getDefaultName'],
+              'BRISK': ['create', 'getDefaultName'],
+              'ORB': ['create', 'setMaxFeatures', 'setScaleFactor', 'setNLevels', 'setEdgeThreshold', 'setFirstLevel', 'setWTA_K', 'setScoreType', 'setPatchSize', 'getFastThreshold', 'getDefaultName'],
+              'MSER': ['create', 'detectRegions', 'setDelta', 'getDelta', 'setMinArea', 'getMinArea', 'setMaxArea', 'getMaxArea', 'setPass2Only', 'getPass2Only', 'getDefaultName'],
+              'FastFeatureDetector': ['create', 'setThreshold', 'getThreshold', 'setNonmaxSuppression', 'getNonmaxSuppression', 'setType', 'getType', 'getDefaultName'],
+              'AgastFeatureDetector': ['create', 'setThreshold', 'getThreshold', 'setNonmaxSuppression', 'getNonmaxSuppression', 'setType', 'getType', 'getDefaultName'],
+              'GFTTDetector': ['create', 'setMaxFeatures', 'getMaxFeatures', 'setQualityLevel', 'getQualityLevel', 'setMinDistance', 'getMinDistance', 'setBlockSize', 'getBlockSize', 'setHarrisDetector', 'getHarrisDetector', 'setK', 'getK', 'getDefaultName'],
+              # 'SimpleBlobDetector': ['create'],
+              'KAZE': ['create', 'setExtended', 'getExtended', 'setUpright', 'getUpright', 'setThreshold', 'getThreshold', 'setNOctaves', 'getNOctaves', 'setNOctaveLayers', 'getNOctaveLayers', 'setDiffusivity', 'getDiffusivity', 'getDefaultName'],
+              'AKAZE': ['create', 'setDescriptorType', 'getDescriptorType', 'setDescriptorSize', 'getDescriptorSize', 'setDescriptorChannels', 'getDescriptorChannels', 'setThreshold', 'getThreshold', 'setNOctaves', 'getNOctaves', 'setNOctaveLayers', 'getNOctaveLayers', 'setDiffusivity', 'getDiffusivity', 'getDefaultName'],
+              'DescriptorMatcher': ['add', 'clear', 'empty', 'isMaskSupported', 'train', 'match', 'knnMatch', 'radiusMatch', 'clone', 'create'],
+              'BFMatcher': ['isMaskSupported', 'create'],
+              '': ['drawKeypoints', 'drawMatches']}
+
+photo = {'': ['createAlignMTB', 'createCalibrateDebevec', 'createCalibrateRobertson', \
+              'createMergeDebevec', 'createMergeMertens', 'createMergeRobertson', \
+              'createTonemapDrago', 'createTonemapMantiuk', 'createTonemapReinhard'],
+        'CalibrateCRF': ['process'],
+        'AlignMTB' : ['calculateShift', 'shiftMat', 'computeBitmaps', 'getMaxBits', 'setMaxBits', \
+                      'getExcludeRange', 'setExcludeRange', 'getCut', 'setCut'],
+        'CalibrateDebevec' : ['getLambda', 'setLambda', 'getSamples', 'setSamples', 'getRandom', 'setRandom'],
+        'CalibrateRobertson' : ['getMaxIter', 'setMaxIter', 'getThreshold', 'setThreshold', 'getRadiance'],
+        'MergeExposures' : ['process'],
+        'MergeDebevec' : ['process'],
+        'MergeMertens' : ['process', 'getContrastWeight', 'setContrastWeight', 'getSaturationWeight', \
+                          'setSaturationWeight', 'getExposureWeight', 'setExposureWeight'],
+        'MergeRobertson' : ['process'],
+        'Tonemap' : ['process' , 'getGamma', 'setGamma'],
+        'TonemapDrago' : ['getSaturation', 'setSaturation', 'getBias', 'setBias', \
+                          'getSigmaColor', 'setSigmaColor', 'getSigmaSpace','setSigmaSpace'],
+        'TonemapMantiuk' : ['getScale', 'setScale', 'getSaturation', 'setSaturation'],
+        'TonemapReinhard' : ['getIntensity', 'setIntensity', 'getLightAdaptation', 'setLightAdaptation', \
+                             'getColorAdaptation', 'setColorAdaptation']
+        }
+
+aruco = {'': ['detectMarkers', 'drawDetectedMarkers', 'drawAxis', 'estimatePoseSingleMarkers', 'estimatePoseBoard', 'interpolateCornersCharuco', 'drawDetectedCornersCharuco'],
+        'aruco_Dictionary': ['get', 'drawMarker'],
+        'aruco_Board': ['create'],
+        'aruco_GridBoard': ['create', 'draw'],
+        'aruco_CharucoBoard': ['create', 'draw'],
+        }
 
 def makeWhiteList(module_list):
     wl = {}
@@ -137,7 +180,7 @@ def makeWhiteList(module_list):
                 wl[k] = m[k]
     return wl
 
-white_list = makeWhiteList([core, imgproc, objdetect, video, dnn])
+white_list = makeWhiteList([core, imgproc, objdetect, video, dnn, features2d, photo, aruco])
 
 # Features to be exported
 export_enums = False
@@ -218,7 +261,8 @@ def handle_ptr(tp):
 
 def handle_vector(tp):
     if tp.startswith('vector_'):
-        tp = 'std::vector<' + "::".join(tp.split('_')[1:]) + '>'
+        tp = handle_vector(tp[tp.find('_') + 1:])
+        tp = 'std::vector<' + "::".join(tp.split('_')) + '>'
     return tp
 
 
@@ -861,13 +905,12 @@ class JSWrapperGenerator(object):
                     [class_info.cname, property.name])))
 
             dv = ''
-            base = Template("""base<$base$isPoly>""")
+            base = Template("""base<$base>""")
 
             assert len(class_info.bases) <= 1 , "multiple inheritance not supported"
 
             if len(class_info.bases) == 1:
-                dv = "," + base.substitute(base=', '.join(class_info.bases),
-                                           isPoly = " ,true" if class_info.name=="Feature2D" else "")
+                dv = "," + base.substitute(base=', '.join(class_info.bases))
 
             self.bindings.append(class_template.substitute(cpp_name=class_info.cname,
                                                            js_name=name,

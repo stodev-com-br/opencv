@@ -17,6 +17,8 @@
 
 #include "opencv2/core/utils/trace.hpp"
 
+#include "opencv2/core/hal/hal.hpp"
+
 #include <stdarg.h> // for va_list
 
 #include "cvconfig.h"
@@ -220,7 +222,7 @@ void copyMakeBorder(const Mat& src, Mat& dst, int top, int bottom, int left, int
 Mat calcSobelKernel2D( int dx, int dy, int apertureSize, int origin=0 );
 Mat calcLaplaceKernel2D( int aperture_size );
 
-void initUndistortMap( const Mat& a, const Mat& k, Size sz, Mat& mapx, Mat& mapy );
+void initUndistortMap( const Mat& a, const Mat& k, const Mat& R, const Mat& new_a, Size sz, Mat& mapx, Mat& mapy, int map_type );
 
 void minMaxLoc(const Mat& src, double* minval, double* maxval,
                           vector<int>* minloc, vector<int>* maxloc, const Mat& mask=Mat());
@@ -317,7 +319,7 @@ protected:
     int test_case_count; // the total number of test cases
 
     // read test params
-    virtual int read_params( CvFileStorage* fs );
+    virtual int read_params( const cv::FileStorage& fs );
 
     // returns the number of tests or -1 if it is unknown a-priori
     virtual int get_test_case_count();
@@ -335,7 +337,7 @@ protected:
     virtual int update_progress( int progress, int test_case_idx, int count, double dt );
 
     // finds test parameter
-    const CvFileNode* find_param( CvFileStorage* fs, const char* param_name );
+    cv::FileNode find_param( const cv::FileStorage& fs, const char* param_name );
 
     // name of the test (it is possible to locate a test by its name)
     string name;
@@ -542,7 +544,7 @@ public:
 
 protected:
 
-    virtual int read_params( CvFileStorage* fs ) CV_OVERRIDE;
+    virtual int read_params( const cv::FileStorage& fs ) CV_OVERRIDE;
     virtual int prepare_test_case( int test_case_idx ) CV_OVERRIDE;
     virtual int validate_test_results( int test_case_idx ) CV_OVERRIDE;
 
@@ -594,7 +596,7 @@ protected:
         catch(const cv::Exception& e)
         {
             thrown = true;
-            if( e.code != expected_code )
+            if( e.code != expected_code && e.code != cv::Error::StsAssert && e.code != cv::Error::StsError )
             {
                 ts->printf(TS::LOG, "%s (test case #%d): the error code %d is different from the expected %d\n",
                     descr, test_case_idx, e.code, expected_code);

@@ -149,11 +149,11 @@ g_api_ocv_pair_mat_mat opPlusM =  {std::string{"operator+"},
                                             [](cv::GMat in1,cv::GMat in2){return in1+in2;},
                                             [](const cv::Mat& in1, const cv::Mat& in2, cv::Mat& out){cv::add(in1, in2, out);}};
 g_api_ocv_pair_mat_mat opMinusM = {std::string{"operator-"},
-                                            [](cv::GMat in,cv::GMat c){return in-c;},
-                                            [](const cv::Mat& in, const cv::Mat& c, cv::Mat& out){cv::subtract(in, c, out);}};
+                                            [](cv::GMat in,cv::GMat in2){return in-in2;},
+                                            [](const cv::Mat& in, const cv::Mat& in2, cv::Mat& out){cv::subtract(in, in2, out);}};
 g_api_ocv_pair_mat_mat opDivM = {std::string{"operator/"},
-                                            [](cv::GMat in,cv::GMat c){return in/c;},
-                                            [](const cv::Mat& in, const cv::Mat& c, cv::Mat& out){cv::divide(in, c, out);}};
+                                            [](cv::GMat in,cv::GMat in2){return in/in2;},
+                                            [](const cv::Mat& in, const cv::Mat& in2, cv::Mat& out){cv::divide(in, in2, out);}};
 g_api_ocv_pair_mat_mat opGreater =  {std::string{"operator>"},
                                             [](cv::GMat in1,cv::GMat in2){return in1>in2;},
                                             [](const cv::Mat& in1, const cv::Mat& in2, cv::Mat& out){cv::compare(in1, in2, out, cv::CMP_GT);}};
@@ -184,8 +184,8 @@ g_api_ocv_pair_mat_mat opXor = {std::string{"operator^"},
                                         [](const cv::Mat& in1, const cv::Mat& in2, cv::Mat& out){cv::bitwise_xor(in1, in2, out);}};
 
 } // anonymous namespace
-struct MathOperatorMatScalarTest : public TestParams<std::tuple<g_api_ocv_pair_mat_scalar,int,cv::Size,int,bool,cv::GCompileArgs>>{};
-struct MathOperatorMatMatTest : public TestParams<std::tuple<g_api_ocv_pair_mat_mat,int,cv::Size,int,bool,cv::GCompileArgs>>{};
+struct MathOperatorMatScalarTest : public TestParams<std::tuple<compare_f, g_api_ocv_pair_mat_scalar,int,cv::Size,int,bool,cv::GCompileArgs>>{};
+struct MathOperatorMatMatTest : public TestParams<std::tuple<compare_f, g_api_ocv_pair_mat_mat,int,cv::Size,int,bool,cv::GCompileArgs>>{};
 struct NotOperatorTest : public TestParams<std::tuple<int,cv::Size,bool,cv::GCompileArgs>> {};
 } // opencv_test
 

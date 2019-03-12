@@ -140,9 +140,9 @@ TEST(LayerFactory, custom_layers)
         net.setPreferableBackend(DNN_BACKEND_OPENCV);
         Mat output = net.forward();
 
-        if (i == 0)      EXPECT_EQ(output.at<float>(0), 1);
-        else if (i == 1) EXPECT_EQ(output.at<float>(0), 2);
-        else if (i == 2) EXPECT_EQ(output.at<float>(0), 1);
+        if (i == 0)      { EXPECT_EQ(output.at<float>(0), 1); }
+        else if (i == 1) { EXPECT_EQ(output.at<float>(0), 2); }
+        else if (i == 2) { EXPECT_EQ(output.at<float>(0), 1); }
     }
     LayerFactory::unregisterLayer("CustomType");
 }
@@ -157,9 +157,9 @@ TEST_P(setInput, normalization)
     const int target   = get<1>(get<3>(GetParam()));
     const bool kSwapRB = true;
 
-    if (backend == DNN_BACKEND_INFERENCE_ENGINE && target == DNN_TARGET_MYRIAD && !checkMyriadTarget())
-        throw SkipTestException("Myriad is not available/disabled in OpenCV");
     if (backend == DNN_BACKEND_OPENCV && target == DNN_TARGET_OPENCL_FP16 && dtype != CV_32F)
+        throw SkipTestException("");
+    if (backend == DNN_BACKEND_VKCOM && dtype != CV_32F)
         throw SkipTestException("");
 
     Mat inp(5, 5, CV_8UC3);
@@ -307,5 +307,39 @@ TEST_P(DeprecatedForward, CustomLayerWithFallback)
 }
 
 INSTANTIATE_TEST_CASE_P(/**/, DeprecatedForward, dnnBackendsAndTargets());
+
+TEST(Net, forwardAndRetrieve)
+{
+    std::string prototxt =
+        "input: \"data\"\n"
+        "layer {\n"
+        "  name: \"testLayer\"\n"
+        "  type: \"Slice\"\n"
+        "  bottom: \"data\"\n"
+        "  top: \"firstCopy\"\n"
+        "  top: \"secondCopy\"\n"
+        "  slice_param {\n"
+        "    axis: 0\n"
+        "    slice_point: 2\n"
+        "  }\n"
+        "}";
+    Net net = readNetFromCaffe(&prototxt[0], prototxt.size());
+    net.setPreferableBackend(DNN_BACKEND_OPENCV);
+
+    Mat inp(4, 5, CV_32F);
+    randu(inp, -1, 1);
+    net.setInput(inp);
+
+    std::vector<String> outNames;
+    outNames.push_back("testLayer");
+    std::vector<std::vector<Mat> > outBlobs;
+
+    net.forward(outBlobs, outNames);
+
+    EXPECT_EQ(outBlobs.size(), 1);
+    EXPECT_EQ(outBlobs[0].size(), 2);
+    normAssert(outBlobs[0][0], inp.rowRange(0, 2), "first part");
+    normAssert(outBlobs[0][1], inp.rowRange(2, 4), "second part");
+}
 
 }} // namespace
