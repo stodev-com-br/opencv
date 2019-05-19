@@ -457,6 +457,7 @@ OCV_OPTION(ENABLE_PRECOMPILED_HEADERS "Use precompiled headers"                 
 OCV_OPTION(ENABLE_SOLUTION_FOLDERS    "Solution folder in Visual Studio or in other IDEs"        (MSVC_IDE OR CMAKE_GENERATOR MATCHES Xcode) )
 OCV_OPTION(ENABLE_PROFILING           "Enable profiling in the GCC compiler (Add flags: -g -pg)" OFF  IF CV_GCC )
 OCV_OPTION(ENABLE_COVERAGE            "Enable coverage collection with  GCov"                    OFF  IF CV_GCC )
+OCV_OPTION(OPENCV_ENABLE_MEMORY_SANITIZER "Better support for memory/address sanitizers"         OFF)
 OCV_OPTION(ENABLE_OMIT_FRAME_POINTER  "Enable -fomit-frame-pointer for GCC"                      ON   IF CV_GCC )
 OCV_OPTION(ENABLE_POWERPC             "Enable PowerPC for GCC"                                   ON   IF (CV_GCC AND CMAKE_SYSTEM_PROCESSOR MATCHES powerpc.*) )
 OCV_OPTION(ENABLE_FAST_MATH           "Enable -ffast-math (not recommended for GCC 4.6.x)"       OFF  IF (CV_GCC AND (X86 OR X86_64)) )
@@ -698,7 +699,7 @@ ocv_cmake_hook(POST_COMPILER_OPTIONS)
 # ----------------------------------------------------------------------------
 if(UNIX)
   if(NOT APPLE_FRAMEWORK OR OPENCV_ENABLE_PKG_CONFIG)
-    if(CMAKE_CROSSCOMPILING AND NOT DEFINED ENV{PKG_CONFIG_LIBDIR}
+    if(CMAKE_CROSSCOMPILING AND NOT DEFINED ENV{PKG_CONFIG_LIBDIR} AND NOT DEFINED ENV{PKG_CONFIG_SYSROOT_DIR}
         AND NOT OPENCV_ENABLE_PKG_CONFIG
     )
       if(NOT PkgConfig_FOUND)
@@ -1301,15 +1302,15 @@ endif()
 
 if(WITH_GTK OR HAVE_GTK)
   if(HAVE_GTK3)
-    status("    GTK+:" "YES (ver ${ALIASOF_gtk+-3.0_VERSION})")
+    status("    GTK+:" "YES (ver ${GTK3_VERSION})")
   elseif(HAVE_GTK)
-    status("    GTK+:" "YES (ver ${ALIASOF_gtk+-2.0_VERSION})")
+    status("    GTK+:" "YES (ver ${GTK2_VERSION})")
   else()
     status("    GTK+:" "NO")
   endif()
   if(HAVE_GTK)
-    status(  "      GThread :" HAVE_GTHREAD THEN "YES (ver ${ALIASOF_gthread-2.0_VERSION})" ELSE NO)
-    status(  "      GtkGlExt:" HAVE_GTKGLEXT THEN "YES (ver ${ALIASOF_gtkglext-1.0_VERSION})" ELSE NO)
+    status(  "      GThread :" HAVE_GTHREAD THEN "YES (ver ${GTHREAD_VERSION})" ELSE NO)
+    status(  "      GtkGlExt:" HAVE_GTKGLEXT THEN "YES (ver ${GTKGLEXT_VERSION})" ELSE NO)
   endif()
 endif()
 
@@ -1449,7 +1450,7 @@ if(WITH_XIMEA OR HAVE_XIMEA)
 endif()
 
 if(WITH_XINE OR HAVE_XINE)
-  status("    Xine:" HAVE_XINE THEN "YES (${XINE_VERSION})" ELSE NO)
+  status("    Xine:"           HAVE_XINE           THEN "YES (ver ${XINE_VERSION})"     ELSE NO)
 endif()
 
 if(WITH_LIBREALSENSE OR HAVE_LIBREALSENSE)

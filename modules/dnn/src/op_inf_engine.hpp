@@ -15,14 +15,6 @@
 #include "opencv2/dnn/utils/inference_engine.hpp"
 
 #ifdef HAVE_INF_ENGINE
-#if defined(__GNUC__) && __GNUC__ >= 5
-//#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wsuggest-override"
-#endif
-#include <inference_engine.hpp>
-#if defined(__GNUC__) && __GNUC__ >= 5
-//#pragma GCC diagnostic pop
-#endif
 
 #define INF_ENGINE_RELEASE_2018R3 2018030000
 #define INF_ENGINE_RELEASE_2018R4 2018040000
@@ -37,10 +29,30 @@
 #define INF_ENGINE_VER_MAJOR_GT(ver) (((INF_ENGINE_RELEASE) / 10000) > ((ver) / 10000))
 #define INF_ENGINE_VER_MAJOR_GE(ver) (((INF_ENGINE_RELEASE) / 10000) >= ((ver) / 10000))
 #define INF_ENGINE_VER_MAJOR_LT(ver) (((INF_ENGINE_RELEASE) / 10000) < ((ver) / 10000))
+#define INF_ENGINE_VER_MAJOR_LE(ver) (((INF_ENGINE_RELEASE) / 10000) <= ((ver) / 10000))
 #define INF_ENGINE_VER_MAJOR_EQ(ver) (((INF_ENGINE_RELEASE) / 10000) == ((ver) / 10000))
+
+#if defined(__GNUC__) && __GNUC__ >= 5
+//#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wsuggest-override"
+#endif
+
+#if defined(__GNUC__) && INF_ENGINE_VER_MAJOR_LE(INF_ENGINE_RELEASE_2019R1)
+#pragma GCC visibility push(default)
+#endif
+
+#include <inference_engine.hpp>
 
 #if INF_ENGINE_VER_MAJOR_GE(INF_ENGINE_RELEASE_2018R5)
 #include <ie_builders.hpp>
+#endif
+
+#if defined(__GNUC__) && INF_ENGINE_VER_MAJOR_LE(INF_ENGINE_RELEASE_2019R1)
+#pragma GCC visibility pop
+#endif
+
+#if defined(__GNUC__) && __GNUC__ >= 5
+//#pragma GCC diagnostic pop
 #endif
 
 #endif  // HAVE_INF_ENGINE
@@ -173,7 +185,8 @@ public:
 
     void init(int targetId);
 
-    void forward();
+    void forward(const std::vector<Ptr<BackendWrapper> >& outBlobsWrappers,
+                 bool isAsync);
 
     void initPlugin(InferenceEngine::ICNNNetwork& net);
 
@@ -185,11 +198,22 @@ private:
     InferenceEngine::InferenceEnginePluginPtr enginePtr;
     InferenceEngine::InferencePlugin plugin;
     InferenceEngine::ExecutableNetwork netExec;
-    InferenceEngine::InferRequest infRequest;
     InferenceEngine::BlobMap allBlobs;
-    InferenceEngine::BlobMap inpBlobs;
-    InferenceEngine::BlobMap outBlobs;
     InferenceEngine::TargetDevice targetDevice;
+
+    struct InfEngineReqWrapper
+    {
+        InfEngineReqWrapper() : isReady(true) {}
+
+        void makePromises(const std::vector<Ptr<BackendWrapper> >& outs);
+
+        InferenceEngine::InferRequest req;
+        std::vector<std::promise<Mat> > outProms;
+        std::vector<std::string> outsNames;
+        bool isReady;
+    };
+
+    std::vector<Ptr<InfEngineReqWrapper> > infRequests;
 
     InferenceEngine::CNNNetwork cnn;
     bool hasNetOwner;
@@ -240,6 +264,7 @@ public:
 
     InferenceEngine::DataPtr dataPtr;
     InferenceEngine::Blob::Ptr blob;
+    std::future<Mat> futureMat;
 };
 
 InferenceEngine::Blob::Ptr wrapToInfEngineBlob(const Mat& m, InferenceEngine::Layout layout = InferenceEngine::Layout::ANY);
@@ -290,7 +315,8 @@ CV__DNN_INLINE_NS_END
 
 bool haveInfEngine();
 
-void forwardInfEngine(Ptr<BackendNode>& node);
+void forwardInfEngine(const std::vector<Ptr<BackendWrapper> >& outBlobsWrappers,
+                      Ptr<BackendNode>& node, bool isAsync);
 
 }}  // namespace dnn, namespace cv
 
