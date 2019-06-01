@@ -167,6 +167,13 @@ TEST_P(Test_ONNX_layers, BatchNormalization)
     testONNXModels("batch_norm");
 }
 
+TEST_P(Test_ONNX_layers, BatchNormalization3D)
+{
+    if (backend == DNN_BACKEND_INFERENCE_ENGINE && target != DNN_TARGET_CPU)
+        throw SkipTestException("");
+    testONNXModels("batch_norm_3d");
+}
+
 TEST_P(Test_ONNX_layers, Transpose)
 {
     if (backend == DNN_BACKEND_INFERENCE_ENGINE &&
@@ -236,6 +243,12 @@ TEST_P(Test_ONNX_layers, DynamicReshape)
 TEST_P(Test_ONNX_layers, Reshape)
 {
     testONNXModels("unsqueeze");
+}
+
+TEST_P(Test_ONNX_layers, Softmax)
+{
+    testONNXModels("softmax");
+    testONNXModels("log_softmax", npy, 0, 0, false, false);
 }
 
 INSTANTIATE_TEST_CASE_P(/*nothing*/, Test_ONNX_layers, dnnBackendsAndTargets());
@@ -330,7 +343,7 @@ TEST_P(Test_ONNX_nets, VGG16_bn)
 
 TEST_P(Test_ONNX_nets, ZFNet)
 {
-    applyTestTag(target == DNN_TARGET_CPU ? CV_TEST_TAG_MEMORY_512MB : CV_TEST_TAG_MEMORY_1GB);
+    applyTestTag(CV_TEST_TAG_MEMORY_2GB);
     testONNXModels("zfnet512", pb);
 }
 
@@ -405,7 +418,10 @@ TEST_P(Test_ONNX_nets, MobileNet_v2)
 
 TEST_P(Test_ONNX_nets, LResNet100E_IR)
 {
-    applyTestTag(target == DNN_TARGET_CPU ? CV_TEST_TAG_MEMORY_512MB : CV_TEST_TAG_MEMORY_1GB);
+    applyTestTag(
+        (target == DNN_TARGET_CPU ? CV_TEST_TAG_MEMORY_512MB : CV_TEST_TAG_MEMORY_1GB),
+        CV_TEST_TAG_DEBUG_LONG
+    );
     if (backend == DNN_BACKEND_INFERENCE_ENGINE &&
          (target == DNN_TARGET_OPENCL_FP16 || target == DNN_TARGET_OPENCL || target == DNN_TARGET_MYRIAD))
         throw SkipTestException("");
