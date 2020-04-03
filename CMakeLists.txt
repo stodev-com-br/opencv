@@ -56,6 +56,10 @@ if(POLICY CMP0056)
   cmake_policy(SET CMP0056 NEW)  # try_compile(): link flags
 endif()
 
+if(POLICY CMP0066)
+  cmake_policy(SET CMP0066 NEW)  # CMake 3.7: try_compile(): use per-config flags, like CMAKE_CXX_FLAGS_RELEASE
+endif()
+
 if(POLICY CMP0067)
   cmake_policy(SET CMP0067 NEW)  # CMake 3.8: try_compile(): honor language standard variables (like C++11)
 endif()
@@ -281,9 +285,12 @@ OCV_OPTION(WITH_INF_ENGINE "Include Intel Inference Engine support" OFF
 OCV_OPTION(WITH_NGRAPH "Include nGraph support" WITH_INF_ENGINE
   VISIBLE_IF TRUE
   VERIFY TARGET ngraph::ngraph)
-OCV_OPTION(WITH_JASPER "Include JPEG2K support" ON
+OCV_OPTION(WITH_JASPER "Include JPEG2K support (Jasper)" ON
   VISIBLE_IF NOT IOS
   VERIFY HAVE_JASPER)
+OCV_OPTION(WITH_OPENJPEG "Include JPEG2K support (OpenJPEG)" ON
+  VISIBLE_IF NOT IOS
+  VERIFY HAVE_OPENJPEG)
 OCV_OPTION(WITH_JPEG "Include JPEG support" ON
   VISIBLE_IF TRUE
   VERIFY HAVE_JPEG)
@@ -939,11 +946,11 @@ endif()
 # for UNIX it does not make sense as LICENSE and readme will be part of the package automatically
 if(ANDROID OR NOT UNIX)
   install(FILES ${OPENCV_LICENSE_FILE}
-        PERMISSIONS OWNER_READ GROUP_READ WORLD_READ
+        PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ
         DESTINATION ./ COMPONENT libs)
   if(OPENCV_README_FILE)
     install(FILES ${OPENCV_README_FILE}
-            PERMISSIONS OWNER_READ GROUP_READ WORLD_READ
+            PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ
             DESTINATION ./ COMPONENT libs)
   endif()
 endif()
@@ -1245,8 +1252,12 @@ if(WITH_TIFF OR HAVE_TIFF)
   status("    TIFF:" TIFF_FOUND THEN "${TIFF_LIBRARY} (ver ${TIFF_VERSION} / ${TIFF_VERSION_STRING})" ELSE "build (ver ${TIFF_VERSION} - ${TIFF_VERSION_STRING})")
 endif()
 
-if(WITH_JASPER OR HAVE_JASPER)
-  status("    JPEG 2000:" JASPER_FOUND THEN "${JASPER_LIBRARY} (ver ${JASPER_VERSION_STRING})" ELSE "build (ver ${JASPER_VERSION_STRING})")
+if(HAVE_OPENJPEG)
+  status("    JPEG 2000:" "OpenJPEG (ver ${OPENJPEG_MAJOR_VERSION}.${OPENJPEG_MINOR_VERSION}.${OPENJPEG_BUILD_VERSION})")
+elseif(HAVE_JASPER)
+  status("    JPEG 2000:" JASPER_FOUND THEN "${JASPER_LIBRARY} (ver ${JASPER_VERSION_STRING})" ELSE "build Jasper (ver ${JASPER_VERSION_STRING})")
+elseif(WITH_OPENJPEG OR WITH_JASPER)
+  status("    JPEG 2000:" "NO")
 endif()
 
 if(WITH_OPENEXR OR HAVE_OPENEXR)
