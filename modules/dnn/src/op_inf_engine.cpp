@@ -11,7 +11,6 @@
 
 #ifdef HAVE_INF_ENGINE
 #include <ie_extension.h>
-#include <ie_plugin_dispatcher.hpp>
 #endif  // HAVE_INF_ENGINE
 
 #include <opencv2/core/utils/configuration.private.hpp>
@@ -889,6 +888,13 @@ bool InfEngineBackendNet::isInitialized()
 #else
     return isInit;
 #endif
+}
+
+void InfEngineBackendNet::reset()
+{
+    allBlobs.clear();
+    infRequests.clear();
+    isInit = false;
 }
 
 void InfEngineBackendNet::addBlobs(const std::vector<cv::Ptr<BackendWrapper> >& ptrs)

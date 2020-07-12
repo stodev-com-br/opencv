@@ -134,11 +134,7 @@ static inline void genData(const InferenceEngine::TensorDesc& desc, Mat& m, Blob
 void runIE(Target target, const std::string& xmlPath, const std::string& binPath,
            std::map<std::string, cv::Mat>& inputsMap, std::map<std::string, cv::Mat>& outputsMap)
 {
-    CNNNetReader reader;
-    reader.ReadNetwork(xmlPath);
-    reader.ReadWeights(binPath);
-
-    CNNNetwork net = reader.getNetwork();
+    SCOPED_TRACE("runIE");
 
     std::string device_name;
 
@@ -148,6 +144,17 @@ void runIE(Target target, const std::string& xmlPath, const std::string& binPath
     InferenceEnginePluginPtr enginePtr;
     InferencePlugin plugin;
 #endif
+
+#if defined(INF_ENGINE_RELEASE) && INF_ENGINE_VER_MAJOR_GT(2019030000)
+    CNNNetwork net = ie.ReadNetwork(xmlPath, binPath);
+#else
+    CNNNetReader reader;
+    reader.ReadNetwork(xmlPath);
+    reader.ReadWeights(binPath);
+
+    CNNNetwork net = reader.getNetwork();
+#endif
+
     ExecutableNetwork netExec;
     InferRequest infRequest;
 
@@ -247,6 +254,8 @@ void runCV(Backend backendId, Target targetId, const std::string& xmlPath, const
            const std::map<std::string, cv::Mat>& inputsMap,
            std::map<std::string, cv::Mat>& outputsMap)
 {
+    SCOPED_TRACE("runOCV");
+
     Net net = readNet(xmlPath, binPath);
     for (auto& it : inputsMap)
         net.setInput(it.second, it.first);
@@ -273,9 +282,18 @@ TEST_P(DNNTestOpenVINO, models)
 
     const Backend backendId = get<0>(get<0>(GetParam()));
     const Target targetId = get<1>(get<0>(GetParam()));
+    std::string modelName = get<1>(GetParam());
 
-    if (backendId != DNN_BACKEND_INFERENCE_ENGINE_NN_BUILDER_2019 && backendId != DNN_BACKEND_INFERENCE_ENGINE_NGRAPH)
-        throw SkipTestException("No support for async forward");
+    ASSERT_FALSE(backendId != DNN_BACKEND_INFERENCE_ENGINE_NN_BUILDER_2019 && backendId != DNN_BACKEND_INFERENCE_ENGINE_NGRAPH) <<
+        "Inference Engine backend is required";
+
+#if INF_ENGINE_VER_MAJOR_GE(2020020000)
+    if (targetId == DNN_TARGET_MYRIAD && backendId == DNN_BACKEND_INFERENCE_ENGINE_NN_BUILDER_2019)
+    {
+        if (modelName == "person-detection-retail-0013")  // IRv10
+            applyTestTag(CV_TEST_TAG_DNN_SKIP_IE_MYRIAD, CV_TEST_TAG_DNN_SKIP_IE_NN_BUILDER, CV_TEST_TAG_DNN_SKIP_IE_VERSION);
+    }
+#endif
 
     if (backendId == DNN_BACKEND_INFERENCE_ENGINE_NN_BUILDER_2019)
         setInferenceEngineBackendType(CV_DNN_BACKEND_INFERENCE_ENGINE_NN_BUILDER_API);
@@ -284,7 +302,6 @@ TEST_P(DNNTestOpenVINO, models)
     else
         FAIL() << "Unknown backendId";
 
-    std::string modelName = get<1>(GetParam());
     bool isFP16 = (targetId == DNN_TARGET_OPENCL_FP16 || targetId == DNN_TARGET_MYRIAD);
 
     const std::map<std::string, OpenVINOModelTestCaseInfo>& models = getOpenVINOTestModels();
@@ -301,8 +318,8 @@ TEST_P(DNNTestOpenVINO, models)
     // Single Myriad device cannot be shared across multiple processes.
     if (targetId == DNN_TARGET_MYRIAD)
         resetMyriadDevice();
-    runIE(targetId, xmlPath, binPath, inputsMap, ieOutputsMap);
-    runCV(backendId, targetId, xmlPath, binPath, inputsMap, cvOutputsMap);
+    EXPECT_NO_THROW(runIE(targetId, xmlPath, binPath, inputsMap, ieOutputsMap)) << "runIE";
+    EXPECT_NO_THROW(runCV(backendId, targetId, xmlPath, binPath, inputsMap, cvOutputsMap)) << "runCV";
 
     double eps = 0;
 #if INF_ENGINE_VER_MAJOR_GE(2020010000)

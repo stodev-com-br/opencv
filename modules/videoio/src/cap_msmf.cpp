@@ -3,7 +3,6 @@
 // of this distribution and at http://opencv.org/license.html
 
 #include "precomp.hpp"
-#if defined _WIN32 && defined HAVE_MSMF
 /*
    Media Foundation-based Video Capturing module is based on
    videoInput library by Evgeny Pereguda:
@@ -493,12 +492,14 @@ public:
             }
         }
     }
-    std::pair<MediaID, MediaType> findBest(const MediaType& newType)
+    std::pair<MediaID, MediaType> findBestVideoFormat(const MediaType& newType)
     {
         std::pair<MediaID, MediaType> best;
         std::map<MediaID, MediaType>::const_iterator i = formats.begin();
         for (; i != formats.end(); ++i)
         {
+            if (i->second.majorType != MFMediaType_Video)
+                continue;
             if (newType.isEmpty()) // file input - choose first returned media type
             {
                 best = *i;
@@ -585,7 +586,7 @@ public:
     virtual bool isOpened() const CV_OVERRIDE { return isOpen; }
     virtual int getCaptureDomain() CV_OVERRIDE { return CV_CAP_MSMF; }
 protected:
-    bool configureOutput(MediaType newType, cv::uint32_t outFormat, bool convertToFormat);
+    bool configureOutput(MediaType newType, cv::uint32_t outFormat);
     bool setTime(double time, bool rough);
     bool configureHW(bool enable);
 
@@ -772,15 +773,20 @@ bool CvCapture_MSMF::configureHW(bool enable)
 #endif
 }
 
-bool CvCapture_MSMF::configureOutput(MediaType newType, cv::uint32_t outFormat, bool convertToFormat)
+bool CvCapture_MSMF::configureOutput(MediaType newType, cv::uint32_t outFormat)
 {
     FormatStorage formats;
     formats.read(videoFileSource.Get());
-    std::pair<FormatStorage::MediaID, MediaType> bestMatch = formats.findBest(newType);
+    std::pair<FormatStorage::MediaID, MediaType> bestMatch = formats.findBestVideoFormat(newType);
+    if (bestMatch.second.isEmpty())
+    {
+        CV_LOG_DEBUG(NULL, "Can not find video stream with requested parameters");
+        return false;
+    }
     dwStreamIndex = bestMatch.first.stream;
     nativeFormat = bestMatch.second;
     MediaType newFormat = nativeFormat;
-    if (convertToFormat)
+    if (convertFormat)
     {
         switch (outFormat)
         {
@@ -840,7 +846,7 @@ bool CvCapture_MSMF::open(int index)
     camid = index;
     readCallback = cb;
     duration = 0;
-    if (configureOutput(MediaType::createDefault(), outputFormat, convertFormat))
+    if (configureOutput(MediaType::createDefault(), outputFormat))
     {
         frameStep = captureFormat.getFrameStep();
     }
@@ -861,7 +867,7 @@ bool CvCapture_MSMF::open(const cv::String& _filename)
     {
         isOpen = true;
         sampleTime = 0;
-        if (configureOutput(MediaType(), outputFormat, convertFormat))
+        if (configureOutput(MediaType(), outputFormat))
         {
             frameStep = captureFormat.getFrameStep();
             filename = _filename;
@@ -1302,44 +1308,45 @@ bool CvCapture_MSMF::setProperty( int property_id, double value )
                 return false;
             }
         case CV_CAP_PROP_FOURCC:
-            return configureOutput(newFormat, (int)cvRound(value), convertFormat);
+            return configureOutput(newFormat, (int)cvRound(value));
         case CV_CAP_PROP_FORMAT:
-            return configureOutput(newFormat, (int)cvRound(value), convertFormat);
+            return configureOutput(newFormat, (int)cvRound(value));
         case CV_CAP_PROP_CONVERT_RGB:
-            return configureOutput(newFormat, outputFormat, value != 0);
+            convertFormat = (value != 0);
+            return configureOutput(newFormat, outputFormat);
         case CV_CAP_PROP_SAR_NUM:
             if (value > 0)
             {
                 newFormat.aspectRatioNum = (UINT32)cvRound(value);
-                return configureOutput(newFormat, outputFormat, convertFormat);
+                return configureOutput(newFormat, outputFormat);
             }
             break;
         case CV_CAP_PROP_SAR_DEN:
             if (value > 0)
             {
                 newFormat.aspectRatioDenom = (UINT32)cvRound(value);
-                return configureOutput(newFormat, outputFormat, convertFormat);
+                return configureOutput(newFormat, outputFormat);
             }
             break;
         case CV_CAP_PROP_FRAME_WIDTH:
             if (value >= 0)
             {
                 newFormat.width = (UINT32)cvRound(value);
-                return configureOutput(newFormat, outputFormat, convertFormat);
+                return configureOutput(newFormat, outputFormat);
             }
             break;
         case CV_CAP_PROP_FRAME_HEIGHT:
             if (value >= 0)
             {
                 newFormat.height = (UINT32)cvRound(value);
-                return configureOutput(newFormat, outputFormat, convertFormat);
+                return configureOutput(newFormat, outputFormat);
             }
             break;
         case CV_CAP_PROP_FPS:
             if (value >= 0)
             {
                 newFormat.setFramerate(value);
-                return configureOutput(newFormat, outputFormat, convertFormat);
+                return configureOutput(newFormat, outputFormat);
             }
             break;
         case CV_CAP_PROP_FRAME_COUNT:
@@ -1569,7 +1576,7 @@ bool CvVideoWriter_MSMF::open( const cv::String& filename, int fourcc,
         SUCCEEDED(mediaTypeOut->SetUINT32(MF_MT_AVG_BITRATE, bitRate)) &&
         SUCCEEDED(mediaTypeOut->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive)) &&
         SUCCEEDED(MFSetAttributeSize(mediaTypeOut.Get(), MF_MT_FRAME_SIZE, videoWidth, videoHeight)) &&
-        SUCCEEDED(MFSetAttributeRatio(mediaTypeOut.Get(), MF_MT_FRAME_RATE, (UINT32)fps, 1)) &&
+        SUCCEEDED(MFSetAttributeRatio(mediaTypeOut.Get(), MF_MT_FRAME_RATE, (UINT32)(fps * 1000), 1000)) &&
         SUCCEEDED(MFSetAttributeRatio(mediaTypeOut.Get(), MF_MT_PIXEL_ASPECT_RATIO, 1, 1)) &&
         // Set the input media type.
         SUCCEEDED(MFCreateMediaType(&mediaTypeIn)) &&
@@ -1578,7 +1585,7 @@ bool CvVideoWriter_MSMF::open( const cv::String& filename, int fourcc,
         SUCCEEDED(mediaTypeIn->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive)) &&
         SUCCEEDED(mediaTypeIn->SetUINT32(MF_MT_DEFAULT_STRIDE, 4 * videoWidth)) && //Assume BGR32 input
         SUCCEEDED(MFSetAttributeSize(mediaTypeIn.Get(), MF_MT_FRAME_SIZE, videoWidth, videoHeight)) &&
-        SUCCEEDED(MFSetAttributeRatio(mediaTypeIn.Get(), MF_MT_FRAME_RATE, (UINT32)fps, 1)) &&
+        SUCCEEDED(MFSetAttributeRatio(mediaTypeIn.Get(), MF_MT_FRAME_RATE, (UINT32)(fps * 1000), 1000)) &&
         SUCCEEDED(MFSetAttributeRatio(mediaTypeIn.Get(), MF_MT_PIXEL_ASPECT_RATIO, 1, 1)) &&
         // Set sink writer parameters
         SUCCEEDED(MFCreateAttributes(&spAttr, 10)) &&
@@ -1599,7 +1606,7 @@ bool CvVideoWriter_MSMF::open( const cv::String& filename, int fourcc,
             {
                 initiated = true;
                 rtStart = 0;
-                MFFrameRateToAverageTimePerFrame((UINT32)fps, 1, &rtDuration);
+                MFFrameRateToAverageTimePerFrame((UINT32)(fps * 1000), 1000, &rtDuration);
                 return true;
             }
         }
@@ -1656,11 +1663,13 @@ void CvVideoWriter_MSMF::write(cv::InputArray img)
 }
 
 cv::Ptr<cv::IVideoWriter> cv::cvCreateVideoWriter_MSMF( const std::string& filename, int fourcc,
-                                                        double fps, const cv::Size &frameSize, bool isColor )
+                                                        double fps, const cv::Size& frameSize,
+                                                        const VideoWriterParameters& params)
 {
     cv::Ptr<CvVideoWriter_MSMF> writer = cv::makePtr<CvVideoWriter_MSMF>();
     if (writer)
     {
+        const bool isColor = params.get(VIDEOWRITER_PROP_IS_COLOR, true);
         writer->open(filename, fourcc, fps, frameSize, isColor);
         if (writer->isOpened())
             return writer;
@@ -1668,4 +1677,221 @@ cv::Ptr<cv::IVideoWriter> cv::cvCreateVideoWriter_MSMF( const std::string& filen
     return cv::Ptr<cv::IVideoWriter>();
 }
 
-#endif
+#if defined(BUILD_PLUGIN)
+
+#include "plugin_api.hpp"
+
+namespace cv {
+
+typedef CvCapture_MSMF CaptureT;
+typedef CvVideoWriter_MSMF WriterT;
+
+static
+CvResult CV_API_CALL cv_capture_open(const char* filename, int camera_index, CV_OUT CvPluginCapture* handle)
+{
+    if (!handle)
+        return CV_ERROR_FAIL;
+    *handle = NULL;
+    if (!filename)
+        return CV_ERROR_FAIL;
+    CaptureT* cap = 0;
+    try
+    {
+        cap = new CaptureT();
+        bool res;
+        if (filename)
+            res = cap->open(std::string(filename));
+        else
+            res = cap->open(camera_index);
+        if (res)
+        {
+            *handle = (CvPluginCapture)cap;
+            return CV_ERROR_OK;
+        }
+    }
+    catch (...)
+    {
+    }
+    if (cap)
+        delete cap;
+    return CV_ERROR_FAIL;
+}
+
+static
+CvResult CV_API_CALL cv_capture_release(CvPluginCapture handle)
+{
+    if (!handle)
+        return CV_ERROR_FAIL;
+    CaptureT* instance = (CaptureT*)handle;
+    delete instance;
+    return CV_ERROR_OK;
+}
+
+
+static
+CvResult CV_API_CALL cv_capture_get_prop(CvPluginCapture handle, int prop, CV_OUT double* val)
+{
+    if (!handle)
+        return CV_ERROR_FAIL;
+    if (!val)
+        return CV_ERROR_FAIL;
+    try
+    {
+        CaptureT* instance = (CaptureT*)handle;
+        *val = instance->getProperty(prop);
+        return CV_ERROR_OK;
+    }
+    catch (...)
+    {
+        return CV_ERROR_FAIL;
+    }
+}
+
+static
+CvResult CV_API_CALL cv_capture_set_prop(CvPluginCapture handle, int prop, double val)
+{
+    if (!handle)
+        return CV_ERROR_FAIL;
+    try
+    {
+        CaptureT* instance = (CaptureT*)handle;
+        return instance->setProperty(prop, val) ? CV_ERROR_OK : CV_ERROR_FAIL;
+    }
+    catch (...)
+    {
+        return CV_ERROR_FAIL;
+    }
+}
+
+static
+CvResult CV_API_CALL cv_capture_grab(CvPluginCapture handle)
+{
+    if (!handle)
+        return CV_ERROR_FAIL;
+    try
+    {
+        CaptureT* instance = (CaptureT*)handle;
+        return instance->grabFrame() ? CV_ERROR_OK : CV_ERROR_FAIL;
+    }
+    catch (...)
+    {
+        return CV_ERROR_FAIL;
+    }
+}
+
+static
+CvResult CV_API_CALL cv_capture_retrieve(CvPluginCapture handle, int stream_idx, cv_videoio_retrieve_cb_t callback, void* userdata)
+{
+    if (!handle)
+        return CV_ERROR_FAIL;
+    try
+    {
+        CaptureT* instance = (CaptureT*)handle;
+        Mat img;
+        if (instance->retrieveFrame(stream_idx, img))
+            return callback(stream_idx, img.data, (int)img.step, img.cols, img.rows, img.channels(), userdata);
+        return CV_ERROR_FAIL;
+    }
+    catch (...)
+    {
+        return CV_ERROR_FAIL;
+    }
+}
+
+static
+CvResult CV_API_CALL cv_writer_open(const char* filename, int fourcc, double fps, int width, int height, int isColor, CV_OUT CvPluginWriter* handle)
+{
+    WriterT* wrt = 0;
+    try
+    {
+        wrt = new WriterT();
+        Size sz(width, height);
+        if (wrt && wrt->open(filename, fourcc, fps, sz, isColor != 0))
+        {
+            *handle = (CvPluginWriter)wrt;
+            return CV_ERROR_OK;
+        }
+    }
+    catch (...)
+    {
+    }
+    if (wrt)
+        delete wrt;
+    return CV_ERROR_FAIL;
+}
+
+static
+CvResult CV_API_CALL cv_writer_release(CvPluginWriter handle)
+{
+    if (!handle)
+        return CV_ERROR_FAIL;
+    WriterT* instance = (WriterT*)handle;
+    delete instance;
+    return CV_ERROR_OK;
+}
+
+static
+CvResult CV_API_CALL cv_writer_get_prop(CvPluginWriter /*handle*/, int /*prop*/, CV_OUT double* /*val*/)
+{
+    return CV_ERROR_FAIL;
+}
+
+static
+CvResult CV_API_CALL cv_writer_set_prop(CvPluginWriter /*handle*/, int /*prop*/, double /*val*/)
+{
+    return CV_ERROR_FAIL;
+}
+
+static
+CvResult CV_API_CALL cv_writer_write(CvPluginWriter handle, const unsigned char* data, int step, int width, int height, int cn)
+{
+    if (!handle)
+        return CV_ERROR_FAIL;
+    try
+    {
+        CV_Assert(step >= 0);
+        WriterT* instance = (WriterT*)handle;
+        Size sz(width, height);
+        Mat img(sz, CV_MAKETYPE(CV_8U, cn), (void*)data, (size_t)step);
+        instance->write(img);
+        return CV_ERROR_OK;
+    }
+    catch (...)
+    {
+        return CV_ERROR_FAIL;
+    }
+}
+
+static const OpenCV_VideoIO_Plugin_API_preview plugin_api_v0 =
+{
+    {
+        sizeof(OpenCV_VideoIO_Plugin_API_preview), ABI_VERSION, API_VERSION,
+        CV_VERSION_MAJOR, CV_VERSION_MINOR, CV_VERSION_REVISION, CV_VERSION_STATUS,
+        "Microsoft Media Foundation OpenCV Video I/O plugin"
+    },
+    /*  1*/CAP_MSMF,
+    /*  2*/cv_capture_open,
+    /*  3*/cv_capture_release,
+    /*  4*/cv_capture_get_prop,
+    /*  5*/cv_capture_set_prop,
+    /*  6*/cv_capture_grab,
+    /*  7*/cv_capture_retrieve,
+    /*  8*/cv_writer_open,
+    /*  9*/cv_writer_release,
+    /* 10*/cv_writer_get_prop,
+    /* 11*/cv_writer_set_prop,
+    /* 12*/cv_writer_write
+};
+
+} // namespace
+
+const OpenCV_VideoIO_Plugin_API_preview* opencv_videoio_plugin_init_v0(int requested_abi_version, int requested_api_version, void* /*reserved=NULL*/) CV_NOEXCEPT
+{
+    if (requested_abi_version != 0)
+        return NULL;
+    if (requested_api_version != 0)
+        return NULL;
+    return &cv::plugin_api_v0;
+}
+
+#endif // BUILD_PLUGIN

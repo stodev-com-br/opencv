@@ -357,6 +357,11 @@ TEST_P(MaxPooling, Accuracy)
         applyTestTag(CV_TEST_TAG_DNN_SKIP_IE_MYRIAD_X, CV_TEST_TAG_DNN_SKIP_IE_VERSION);
 #endif
 
+#if defined(INF_ENGINE_RELEASE) && INF_ENGINE_VER_MAJOR_GE(2020020000)
+    if (backendId == DNN_BACKEND_INFERENCE_ENGINE_NGRAPH && targetId == DNN_TARGET_MYRIAD)
+        applyTestTag(CV_TEST_TAG_DNN_SKIP_IE_MYRIAD, CV_TEST_TAG_DNN_SKIP_IE_NGRAPH, CV_TEST_TAG_DNN_SKIP_IE_VERSION);
+#endif
+
     LayerParams lp;
     lp.set("pool", "max");
     lp.set("kernel_w", kernel.width);
@@ -442,7 +447,7 @@ TEST_P(SoftMax, Accuracy)
     Backend backendId = get<0>(get<1>(GetParam()));
     Target targetId = get<1>(get<1>(GetParam()));
     LayerParams lp;
-    lp.type = "SoftMax";
+    lp.type = "Softmax";
     lp.name = "testLayer";
 
     int sz[] = {1, inChannels, 1, 1};
