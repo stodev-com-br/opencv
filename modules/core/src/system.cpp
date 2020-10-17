@@ -399,6 +399,8 @@ struct HWFeatures
         g_hwFeatureNames[CPU_AVX512_CNL] = "AVX512-CNL";
         g_hwFeatureNames[CPU_AVX512_CLX] = "AVX512-CLX";
         g_hwFeatureNames[CPU_AVX512_ICL] = "AVX512-ICL";
+
+        g_hwFeatureNames[CPU_RVV] = "RVV";
     }
 
     void initialize(void)
@@ -595,6 +597,10 @@ struct HWFeatures
         have[CV_CPU_VSX3] = (hwcap2 & PPC_FEATURE2_ARCH_3_00);
     #else
         have[CV_CPU_VSX3] = (CV_VSX3);
+    #endif
+
+    #if defined __riscv && defined __riscv_vector
+        have[CV_CPU_RVV] = true;
     #endif
 
         bool skip_baseline_check = false;
@@ -1410,7 +1416,10 @@ static TlsAbstraction* getTlsAbstraction()
 #ifdef WINRT
 static __declspec( thread ) void* tlsData = NULL; // using C++11 thread attribute for local thread data
 TlsAbstraction::TlsAbstraction() {}
-TlsAbstraction::~TlsAbstraction() {}
+TlsAbstraction::~TlsAbstraction()
+{
+    cv::__termination = true;  // DllMain is missing in static builds
+}
 void* TlsAbstraction::getData_() const
 {
     return tlsData;
@@ -1434,6 +1443,7 @@ TlsAbstraction::TlsAbstraction()
 }
 TlsAbstraction::~TlsAbstraction()
 {
+    cv::__termination = true;  // DllMain is missing in static builds
 #ifndef CV_USE_FLS
     TlsFree(tlsKey);
 #else // CV_USE_FLS
@@ -1466,6 +1476,7 @@ TlsAbstraction::TlsAbstraction()
 }
 TlsAbstraction::~TlsAbstraction()
 {
+    cv::__termination = true;  // DllMain is missing in static builds
     if (pthread_key_delete(tlsKey) != 0)
     {
         // Don't use logging here

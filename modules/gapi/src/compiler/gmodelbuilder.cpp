@@ -2,7 +2,7 @@
 // It is subject to the license terms in the LICENSE file found in the top-level directory
 // of this distribution and at http://opencv.org/license.html.
 //
-// Copyright (C) 2018 Intel Corporation
+// Copyright (C) 2018-2020 Intel Corporation
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -139,7 +139,7 @@ cv::gimpl::Unrolled cv::gimpl::unrollExpr(const GProtoArgs &ins,
                     std::size_t port  = ade::util::index(it);
                     GShape shape      = ade::util::value(it);
 
-                    GOrigin org { shape, node, port};
+                    GOrigin org { shape, node, port, {}, origin.kind };
                     origins.insert(org);
                 }
 
@@ -286,7 +286,7 @@ ade::NodeHandle cv::gimpl::GModelBuilder::put_OpNode(const cv::GNode &node)
     {
         GAPI_Assert(node.shape() == GNode::NodeShape::CALL);
         const auto &call_p = node.call().priv();
-        auto nh = cv::gimpl::GModel::mkOpNode(m_gm, call_p.m_k, call_p.m_args, node_p.m_island);
+        auto nh = cv::gimpl::GModel::mkOpNode(m_gm, call_p.m_k, call_p.m_args, call_p.m_params, node_p.m_island);
         m_graph_ops[&node_p] = nh;
         return nh;
     }

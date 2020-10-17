@@ -2,7 +2,7 @@
 // It is subject to the license terms in the LICENSE file found in the top-level directory
 // of this distribution and at http://opencv.org/license.html.
 //
-// Copyright (C) 2018 Intel Corporation
+// Copyright (C) 2018-2020 Intel Corporation
 
 
 #ifndef OPENCV_GAPI_GMODEL_HPP
@@ -26,6 +26,7 @@
 
 #include <opencv2/gapi/garg.hpp>
 #include <opencv2/gapi/gkernel.hpp>
+#include <opencv2/gapi/gcommon.hpp>
 
 #include "compiler/gobjref.hpp"
 #include "compiler/gislandmodel.hpp"
@@ -60,6 +61,7 @@ struct Op
     std::vector<RcDesc> outs; // TODO: Introduce a new type for resource references
 
     cv::gapi::GBackend  backend;
+    cv::util::any params; // Operation specific information
 };
 
 struct Data
@@ -71,6 +73,7 @@ struct Data
     int      rc;
     GMetaArg meta;
     HostCtor ctor;  // T-specific helper to deal with unknown types in our code
+    cv::detail::OpaqueKind kind; // FIXME: is needed to store GArray/GOpaque type
     // FIXME: Why rc+shape+meta is not represented as RcDesc here?
 
     enum class Storage: int
@@ -260,7 +263,11 @@ namespace GModel
     // GAPI_EXPORTS for tests
     GAPI_EXPORTS void init (Graph& g);
 
-    GAPI_EXPORTS ade::NodeHandle mkOpNode(Graph &g, const GKernel &k, const std::vector<GArg>& args, const std::string &island);
+    GAPI_EXPORTS ade::NodeHandle mkOpNode(Graph &g,
+                                          const GKernel &k,
+                                          const std::vector<GArg>& args,
+                                          const cv::util::any& params,
+                                          const std::string &island);
     // Isn't used by the framework or default backends, required for external backend development
     GAPI_EXPORTS ade::NodeHandle mkDataNode(Graph &g, const GShape shape);
 

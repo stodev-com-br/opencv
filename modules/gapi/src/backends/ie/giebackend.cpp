@@ -175,11 +175,26 @@ struct IEUnit {
     IE::InputsDataMap inputs;
     IE::OutputsDataMap outputs;
 
+    IE::ExecutableNetwork this_network;
+    cv::gimpl::ie::wrap::Plugin this_plugin;
+
     explicit IEUnit(const cv::gapi::ie::detail::ParamDesc &pp)
         : params(pp) {
-        net = cv::gimpl::ie::wrap::readNetwork(params);
-        inputs  = net.getInputsInfo();
-        outputs = net.getOutputsInfo();
+        if (params.kind == cv::gapi::ie::detail::ParamDesc::Kind::Load) {
+            net = cv::gimpl::ie::wrap::readNetwork(params);
+            inputs  = net.getInputsInfo();
+            outputs = net.getOutputsInfo();
+        } else if (params.kind == cv::gapi::ie::detail::ParamDesc::Kind::Import) {
+            this_plugin  = cv::gimpl::ie::wrap::getPlugin(params);
+            this_network = cv::gimpl::ie::wrap::importNetwork(this_plugin, params);
+            // FIXME: ICNNetwork returns InputsDataMap/OutputsDataMap,
+            // but ExecutableNetwork returns ConstInputsDataMap/ConstOutputsDataMap
+            inputs  = cv::gimpl::ie::wrap::toInputsDataMap(this_network.GetInputsInfo());
+            outputs = cv::gimpl::ie::wrap::toOutputsDataMap(this_network.GetOutputsInfo());
+        } else {
+            cv::util::throw_error(std::logic_error("Unsupported ParamDesc::Kind"));
+        }
+
         // The practice shows that not all inputs and not all outputs
         // are mandatory to specify in IE model.
         // So what we're concerned here about is:
@@ -205,10 +220,15 @@ struct IEUnit {
 
     // This method is [supposed to be] called at Island compilation stage
     cv::gimpl::ie::IECompiled compile() const {
-        auto plugin       = cv::gimpl::ie::wrap::getPlugin(params);
-        auto this_network = cv::gimpl::ie::wrap::loadNetwork(plugin, net, params);
-        auto this_request = this_network.CreateInferRequest();
+        IEUnit* non_const_this = const_cast<IEUnit*>(this);
+        if (params.kind == cv::gapi::ie::detail::ParamDesc::Kind::Load) {
+            // FIXME: In case importNetwork for fill inputs/outputs need to obtain ExecutableNetwork, but
+            // for loadNetwork they can be obtained by using readNetwork
+            non_const_this->this_plugin  = cv::gimpl::ie::wrap::getPlugin(params);
+            non_const_this->this_network = cv::gimpl::ie::wrap::loadNetwork(non_const_this->this_plugin, net, params);
+        }
 
+        auto this_request = non_const_this->this_network.CreateInferRequest();
         // Bind const data to infer request
         for (auto &&p : params.const_inputs) {
             // FIXME: SetBlob is known to be inefficient,
@@ -217,7 +237,16 @@ struct IEUnit {
             // Still, constant data is to set only once.
             this_request.SetBlob(p.first, wrapIE(p.second.first, p.second.second));
         }
-        return {plugin, this_network, this_request};
+        // Bind const data to infer request
+        for (auto &&p : params.const_inputs) {
+            // FIXME: SetBlob is known to be inefficient,
+            // it is worth to make a customizable "initializer" and pass the
+            // cv::Mat-wrapped blob there to support IE's optimal "GetBlob idiom"
+            // Still, constant data is to set only once.
+            this_request.SetBlob(p.first, wrapIE(p.second.first, p.second.second));
+        }
+
+        return {this_plugin, this_network, this_request};
     }
 };
 
@@ -397,6 +426,10 @@ void cv::gimpl::ie::GIEExecutable::run(std::vector<InObj>  &&input_objs,
     kk.run(this_iec, uu, context);
 
     for (auto &it : output_objs) magazine::writeBack(m_res, it.first, it.second);
+
+    // In/Out args clean-up is mandatory now with RMat
+    for (auto &it : input_objs) magazine::unbind(m_res, it.first);
+    for (auto &it : output_objs) magazine::unbind(m_res, it.first);
 }
 
 namespace cv {
@@ -614,7 +647,7 @@ struct InferList2: public cv::detail::KernelTag {
             GAPI_Assert(util::holds_alternative<cv::GArrayDesc>(mm)
                         && "Non-array inputs are not supported");
 
-            if (op.k.inSpecs[idx] == cv::detail::ArgSpec::RECT) {
+            if (op.k.inKinds[idx] == cv::detail::OpaqueKind::CV_RECT) {
                 // This is a cv::Rect -- configure the IE preprocessing
                 ii->setPrecision(toIE(meta_0.depth));
                 ii->getPreProcess().setResizeAlgorithm(IE::RESIZE_BILINEAR);
@@ -622,7 +655,7 @@ struct InferList2: public cv::detail::KernelTag {
                 // This is a cv::GMat (equals to: cv::Mat)
                 // Just validate that it is really the type
                 // (other types are prohibited here)
-                GAPI_Assert(op.k.inSpecs[idx] == cv::detail::ArgSpec::GMAT);
+                GAPI_Assert(op.k.inKinds[idx] == cv::detail::OpaqueKind::CV_MAT);
             }
             idx++; // NB: Never forget to increment the counter
         }
@@ -666,11 +699,11 @@ struct InferList2: public cv::detail::KernelTag {
                 GAPI_Assert(this_vec.size() == list_size);
                 // Prepare input {{{
                 IE::Blob::Ptr this_blob;
-                if (this_vec.spec() == cv::detail::TypeSpec::RECT) {
+                if (this_vec.getKind() == cv::detail::OpaqueKind::CV_RECT) {
                     // ROI case - create an ROI blob
                     const auto &vec = this_vec.rref<cv::Rect>();
                     this_blob = IE::make_shared_blob(blob_0, toIE(vec[list_idx]));
-                } else if (this_vec.spec() == cv::detail::TypeSpec::MAT) {
+                } else if (this_vec.getKind() == cv::detail::OpaqueKind::CV_MAT) {
                     // Mat case - create a regular blob
                     // FIXME: NOW Assume Mats are always BLOBS (not
                     // images)
@@ -717,9 +750,23 @@ namespace {
             // FIXME: Introduce a DNNBackend interface which'd specify
             // the framework for this???
             GIEModel gm(gr);
-            const auto &np = gm.metadata(nh).get<NetworkParams>();
-            const auto &pp = cv::util::any_cast<cv::gapi::ie::detail::ParamDesc>(np.opaque);
+            auto &np = gm.metadata(nh).get<NetworkParams>();
+            auto &pp = cv::util::any_cast<cv::gapi::ie::detail::ParamDesc>(np.opaque);
             const auto &ki = cv::util::any_cast<KImpl>(ii.opaque);
+
+            GModel::Graph model(gr);
+            auto& op = model.metadata(nh).get<Op>();
+
+            // NB: In case generic infer, info about in/out names is stored in operation (op.params)
+            if (pp.is_generic)
+            {
+                auto& info      = cv::util::any_cast<cv::InOutInfo>(op.params);
+                pp.input_names  = info.in_names;
+                pp.output_names = info.out_names;
+                pp.num_in       = info.in_names.size();
+                pp.num_out      = info.out_names.size();
+            }
+
             gm.metadata(nh).set(IEUnit{pp});
             gm.metadata(nh).set(IECallable{ki.run});
             gm.metadata(nh).set(CustomMetaFunction{ki.customMetaFunc});
