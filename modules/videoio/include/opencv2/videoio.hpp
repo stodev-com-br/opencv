@@ -112,6 +112,7 @@ enum VideoCaptureAPIs {
        CAP_REALSENSE    = 1500,         //!< Synonym for CAP_INTELPERC
        CAP_OPENNI2      = 1600,         //!< OpenNI2 (for Kinect)
        CAP_OPENNI2_ASUS = 1610,         //!< OpenNI2 (for Asus Xtion and Occipital Structure sensors)
+       CAP_OPENNI2_ASTRA= 1620,         //!< OpenNI2 (for Orbbec Astra)
        CAP_GPHOTO2      = 1700,         //!< gPhoto2 connection
        CAP_GSTREAMER    = 1800,         //!< GStreamer
        CAP_FFMPEG       = 1900,         //!< Open and record video file or stream using the FFMPEG library
@@ -120,6 +121,7 @@ enum VideoCaptureAPIs {
        CAP_OPENCV_MJPEG = 2200,         //!< Built-in OpenCV MotionJPEG codec
        CAP_INTEL_MFX    = 2300,         //!< Intel MediaSDK
        CAP_XINE         = 2400,         //!< XINE engine (Linux)
+       CAP_UEYE         = 2500,         //!< uEye Camera API
      };
 
 /** @brief %VideoCapture generic properties identifier.
@@ -192,8 +194,9 @@ enum VideoWriterProperties {
   VIDEOWRITER_PROP_QUALITY = 1,    //!< Current quality (0..100%) of the encoded videostream. Can be adjusted dynamically in some codecs.
   VIDEOWRITER_PROP_FRAMEBYTES = 2, //!< (Read-only): Size of just encoded video frame. Note that the encoding order may be different from representation order.
   VIDEOWRITER_PROP_NSTRIPES = 3,   //!< Number of stripes for parallel encoding. -1 for auto detection.
-  VIDEOWRITER_PROP_IS_COLOR = 4    //!< If it is not zero, the encoder will expect and encode color frames, otherwise it
+  VIDEOWRITER_PROP_IS_COLOR = 4,   //!< If it is not zero, the encoder will expect and encode color frames, otherwise it
                                    //!< will work with grayscale frames.
+  VIDEOWRITER_PROP_DEPTH = 5       //!< Defaults to CV_8U.
 };
 
 //! @} videoio_flags_base
@@ -649,6 +652,14 @@ public:
     CV_WRAP explicit VideoCapture(const String& filename, int apiPreference = CAP_ANY);
 
     /** @overload
+    @brief Opens a video file or a capturing device or an IP video stream for video capturing with API Preference and parameters
+
+    The `params` parameter allows to specify extra parameters encoded as pairs `(paramId_1, paramValue_1, paramId_2, paramValue_2, ...)`.
+    See cv::VideoCaptureProperties
+    */
+    CV_WRAP explicit VideoCapture(const String& filename, int apiPreference, const std::vector<int>& params);
+
+    /** @overload
     @brief  Opens a camera for video capturing
 
     @param index id of the video capturing device to open. To open default camera using default backend just pass 0.
@@ -659,6 +670,14 @@ public:
     @sa cv::VideoCaptureAPIs
     */
     CV_WRAP explicit VideoCapture(int index, int apiPreference = CAP_ANY);
+
+    /** @overload
+    @brief Opens a camera for video capturing with API Preference and parameters
+
+    The `params` parameter allows to specify extra parameters encoded as pairs `(paramId_1, paramValue_1, paramId_2, paramValue_2, ...)`.
+    See cv::VideoCaptureProperties
+    */
+    CV_WRAP explicit VideoCapture(int index, int apiPreference, const std::vector<int>& params);
 
     /** @brief Default destructor
 
@@ -681,12 +700,38 @@ public:
 
     @overload
 
+    The `params` parameter allows to specify extra parameters encoded as pairs `(paramId_1, paramValue_1, paramId_2, paramValue_2, ...)`.
+    See cv::VideoCaptureProperties
+
+    @return `true` if the file has been successfully opened
+
+    The method first calls VideoCapture::release to close the already opened file or camera.
+     */
+    CV_WRAP virtual bool open(const String& filename, int apiPreference, const std::vector<int>& params);
+
+    /** @brief  Opens a camera for video capturing
+
+    @overload
+
     Parameters are same as the constructor VideoCapture(int index, int apiPreference = CAP_ANY)
     @return `true` if the camera has been successfully opened.
 
     The method first calls VideoCapture::release to close the already opened file or camera.
     */
     CV_WRAP virtual bool open(int index, int apiPreference = CAP_ANY);
+
+    /** @brief Returns true if video capturing has been initialized already.
+
+    @overload
+
+    The `params` parameter allows to specify extra parameters encoded as pairs `(paramId_1, paramValue_1, paramId_2, paramValue_2, ...)`.
+    See cv::VideoCaptureProperties
+
+    @return `true` if the camera has been successfully opened.
+
+    The method first calls VideoCapture::release to close the already opened file or camera.
+    */
+    CV_WRAP virtual bool open(int index, int apiPreference, const std::vector<int>& params);
 
     /** @brief Returns true if video capturing has been initialized already.
 
@@ -825,7 +870,7 @@ public:
     @throws Exception %Exception on stream errors (check .isOpened() to filter out malformed streams) or VideoCapture type is not supported
 
     The primary use of the function is in multi-camera environments.
-    The method fills the ready state vector, grabbs video frame, if camera is ready.
+    The method fills the ready state vector, grabs video frame, if camera is ready.
 
     After this call use VideoCapture::retrieve() to decode and fetch frame data.
     */

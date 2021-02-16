@@ -130,6 +130,30 @@ INSTANTIATE_TEST_CASE_P(Dilate3x3TestCPU, Dilate3x3Test,
                                 Values(AbsExact().to_compare_obj()),
                                 Values(1,2,4)));
 
+INSTANTIATE_TEST_CASE_P(MorphologyExTestCPU, MorphologyExTest,
+                        Combine(Values(CV_8UC1, CV_8UC3, CV_16UC1, CV_16SC1, CV_32FC1),
+                                Values(cv::Size(1280, 720),
+                                       cv::Size(640, 480)),
+                                Values(-1),
+                                Values(IMGPROC_CPU),
+                                Values(AbsExact().to_compare_obj()),
+                                Values(cv::MorphTypes::MORPH_ERODE,
+                                       cv::MorphTypes::MORPH_DILATE,
+                                       cv::MorphTypes::MORPH_OPEN,
+                                       cv::MorphTypes::MORPH_CLOSE,
+                                       cv::MorphTypes::MORPH_GRADIENT,
+                                       cv::MorphTypes::MORPH_TOPHAT,
+                                       cv::MorphTypes::MORPH_BLACKHAT)));
+
+INSTANTIATE_TEST_CASE_P(MorphologyExHitMissTestCPU, MorphologyExTest,
+                        Combine(Values(CV_8UC1),
+                                Values(cv::Size(1280, 720),
+                                       cv::Size(640, 480)),
+                                Values(-1),
+                                Values(IMGPROC_CPU),
+                                Values(AbsExact().to_compare_obj()),
+                                Values(cv::MorphTypes::MORPH_HITMISS)));
+
 INSTANTIATE_TEST_CASE_P(SobelTestCPU, SobelTest,
                         Combine(Values(CV_8UC1, CV_8UC3, CV_16UC1, CV_16SC1),
                                 Values(cv::Size(1280, 720),
@@ -240,6 +264,143 @@ INSTANTIATE_TEST_CASE_P(GoodFeaturesInternalTestCPU, GoodFeaturesTest,
                                 Values(5.0),
                                 Values(3),
                                 Values(true)));
+
+INSTANTIATE_TEST_CASE_P(FindContoursNoOffsetTestCPU, FindContoursNoOffsetTest,
+                        Combine(Values(IMGPROC_CPU),
+                                Values(cv::Size(1280, 720)),
+                                Values(CV_8UC1),
+                                Values(RETR_EXTERNAL),
+                                Values(CHAIN_APPROX_NONE),
+                                Values(AbsExact().to_compare_obj())));
+
+INSTANTIATE_TEST_CASE_P(FindContoursOffsetTestCPU, FindContoursOffsetTest,
+                        Values(IMGPROC_CPU));
+
+INSTANTIATE_TEST_CASE_P(FindContoursHNoOffsetTestCPU, FindContoursHNoOffsetTest,
+                        Combine(Values(IMGPROC_CPU),
+                                Values(cv::Size(1280, 720),
+                                       cv::Size(640, 480)),
+                                Values(CV_8UC1),
+                                Values(RETR_EXTERNAL, RETR_LIST, RETR_CCOMP, RETR_TREE),
+                                Values(CHAIN_APPROX_NONE, CHAIN_APPROX_SIMPLE,
+                                       CHAIN_APPROX_TC89_L1, CHAIN_APPROX_TC89_KCOS),
+                                Values(AbsExact().to_compare_obj())));
+
+INSTANTIATE_TEST_CASE_P(FindContoursHNoOffset32STestCPU, FindContoursHNoOffsetTest,
+                        Combine(Values(IMGPROC_CPU),
+                                Values(cv::Size(1280, 720),
+                                       cv::Size(640, 480)),
+                                Values(CV_32SC1),
+                                Values(RETR_CCOMP, RETR_FLOODFILL),
+                                Values(CHAIN_APPROX_NONE, CHAIN_APPROX_SIMPLE,
+                                       CHAIN_APPROX_TC89_L1, CHAIN_APPROX_TC89_KCOS),
+                                Values(AbsExact().to_compare_obj())));
+
+INSTANTIATE_TEST_CASE_P(FindContoursHOffsetTestCPU, FindContoursHOffsetTest,
+                        Values(IMGPROC_CPU));
+
+INSTANTIATE_TEST_CASE_P(BoundingRectMatTestCPU, BoundingRectMatTest,
+                        Combine(Values( CV_8UC1 ),
+                                Values(cv::Size(1280, 720),
+                                       cv::Size(640, 480),
+                                       cv::Size(128, 128)),
+                                Values(-1),
+                                Values(IMGPROC_CPU),
+                                Values(IoUToleranceRect(0).to_compare_obj()),
+                                Values(false)));
+
+INSTANTIATE_TEST_CASE_P(BoundingRectMatVectorTestCPU, BoundingRectMatTest,
+                        Combine(Values(CV_32S, CV_32F),
+                                Values(cv::Size(1280, 1),
+                                       cv::Size(128, 1)),
+                                Values(-1),
+                                Values(IMGPROC_CPU),
+                                Values(IoUToleranceRect(1e-5).to_compare_obj()),
+                                Values(true)));
+
+INSTANTIATE_TEST_CASE_P(BoundingRectVector32STestCPU, BoundingRectVector32STest,
+                        Combine(Values(-1),
+                                Values(cv::Size(1280, 1),
+                                       cv::Size(128, 1)),
+                                Values(-1),
+                                Values(IMGPROC_CPU),
+                                Values(IoUToleranceRect(0).to_compare_obj())));
+
+ INSTANTIATE_TEST_CASE_P(BoundingRectVector32FTestCPU, BoundingRectVector32FTest,
+                         Combine(Values(-1),
+                                 Values(cv::Size(1280, 1),
+                                        cv::Size(128, 1)),
+                                 Values(-1),
+                                 Values(IMGPROC_CPU),
+                                 Values(IoUToleranceRect(1e-5).to_compare_obj())));
+
+INSTANTIATE_TEST_CASE_P(FitLine2DMatVectorTestCPU, FitLine2DMatVectorTest,
+                        Combine(Values(CV_8U, CV_8S, CV_16U, CV_16S,
+                                       CV_32S, CV_32F, CV_64F),
+                                Values(cv::Size(8, 0), cv::Size(1024, 0)),
+                                Values(-1),
+                                Values(IMGPROC_CPU),
+                                Values(RelDiffToleranceVec<float, 4>(0.01).to_compare_obj()),
+                                Values(DIST_L1, DIST_L2, DIST_L12, DIST_FAIR,
+                                       DIST_WELSCH, DIST_HUBER)));
+
+INSTANTIATE_TEST_CASE_P(FitLine2DVector32STestCPU, FitLine2DVector32STest,
+                        Combine(Values(-1),
+                                Values(cv::Size(8, 0)),
+                                Values(-1),
+                                Values(IMGPROC_CPU),
+                                Values(RelDiffToleranceVec<float, 4>(0.01).to_compare_obj()),
+                                Values(DIST_L1)));
+
+INSTANTIATE_TEST_CASE_P(FitLine2DVector32FTestCPU, FitLine2DVector32FTest,
+                        Combine(Values(-1),
+                                Values(cv::Size(8, 0)),
+                                Values(-1),
+                                Values(IMGPROC_CPU),
+                                Values(RelDiffToleranceVec<float, 4>(0.01).to_compare_obj()),
+                                Values(DIST_L1)));
+
+INSTANTIATE_TEST_CASE_P(FitLine2DVector64FTestCPU, FitLine2DVector64FTest,
+                        Combine(Values(-1),
+                                Values(cv::Size(8, 0)),
+                                Values(-1),
+                                Values(IMGPROC_CPU),
+                                Values(RelDiffToleranceVec<float, 4>(0.01).to_compare_obj()),
+                                Values(DIST_L1)));
+
+INSTANTIATE_TEST_CASE_P(FitLine3DMatVectorTestCPU, FitLine3DMatVectorTest,
+                        Combine(Values(CV_8UC1, CV_8SC1, CV_16UC1, CV_16SC1,
+                                       CV_32SC1, CV_32FC1, CV_64FC1),
+                                Values(cv::Size(8, 0), cv::Size(1024, 0)),
+                                Values(-1),
+                                Values(IMGPROC_CPU),
+                                Values(RelDiffToleranceVec<float, 6>(0.01).to_compare_obj()),
+                                Values(DIST_L1, DIST_L2, DIST_L12, DIST_FAIR,
+                                       DIST_WELSCH, DIST_HUBER)));
+
+INSTANTIATE_TEST_CASE_P(FitLine3DVector32STestCPU, FitLine3DVector32STest,
+                        Combine(Values(-1),
+                                Values(cv::Size(8, 0)),
+                                Values(-1),
+                                Values(IMGPROC_CPU),
+                                Values(RelDiffToleranceVec<float, 6>(0.01).to_compare_obj()),
+                                Values(DIST_L1)));
+
+INSTANTIATE_TEST_CASE_P(FitLine3DVector32FTestCPU, FitLine3DVector32FTest,
+                        Combine(Values(-1),
+                                Values(cv::Size(8, 0)),
+                                Values(-1),
+                                Values(IMGPROC_CPU),
+                                Values(RelDiffToleranceVec<float, 6>(0.01).to_compare_obj()),
+                                Values(DIST_L1)));
+
+INSTANTIATE_TEST_CASE_P(FitLine3DVector64FTestCPU, FitLine3DVector64FTest,
+                        Combine(Values(-1),
+                                Values(cv::Size(8, 0)),
+                                Values(-1),
+                                Values(IMGPROC_CPU),
+                                Values(RelDiffToleranceVec<float, 6>(0.01).to_compare_obj()),
+                                Values(DIST_L1)));
 
 INSTANTIATE_TEST_CASE_P(BGR2RGBTestCPU, BGR2RGBTest,
                         Combine(Values(CV_8UC3),

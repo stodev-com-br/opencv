@@ -71,7 +71,7 @@ void linkNodes(ade::Graph& g) {
     for (const auto& nh : g.nodes()) {
         if (gm.metadata(nh).get<cv::gimpl::NodeType>().t == cv::gimpl::NodeType::OP) {
             const auto& op = gm.metadata(nh).get<gimpl::Op>();
-            for (const auto& in : ade::util::indexed(op.args)) {
+            for (const auto in : ade::util::indexed(op.args)) {
                 const auto& arg = ade::util::value(in);
                 if (arg.kind == cv::detail::ArgKind::GOBJREF) {
                     const auto idx = ade::util::index(in);
@@ -82,9 +82,9 @@ void linkNodes(ade::Graph& g) {
                 }
             }
 
-            for (const auto& out : ade::util::indexed(op.outs)) {
-                const auto idx = ade::util::index(out);
-                const auto rc  = ade::util::value(out);
+            for (const auto out : ade::util::indexed(op.outs)) {
+                const auto  idx = ade::util::index(out);
+                const auto& rc  = ade::util::value(out);
                 const auto& out_nh = dataNodes.at(rc);
                 const auto& out_eh = g.link(nh, out_nh);
                 gm.metadata(out_eh).set(cv::gimpl::Output{idx});
@@ -94,13 +94,14 @@ void linkNodes(ade::Graph& g) {
 }
 
 void relinkProto(ade::Graph& g) {
+    using namespace cv::gimpl;
     // identify which node handles map to the protocol
     // input/output object in the reconstructed graph
-    using S = std::set<cv::gimpl::RcDesc>;                  // FIXME: use ...
-    using M = std::map<cv::gimpl::RcDesc, ade::NodeHandle>; // FIXME: unordered!
+    using S = std::set<RcDesc>;                  // FIXME: use ...
+    using M = std::map<RcDesc, ade::NodeHandle>; // FIXME: unordered!
 
-    cv::gimpl::GModel::Graph gm(g);
-    auto &proto = gm.metadata().get<cv::gimpl::Protocol>();
+    GModel::Graph gm(g);
+    auto &proto = gm.metadata().get<Protocol>();
 
     const S set_in(proto.inputs.begin(), proto.inputs.end());
     const S set_out(proto.outputs.begin(), proto.outputs.end());
@@ -108,9 +109,9 @@ void relinkProto(ade::Graph& g) {
 
     // Associate the protocol node handles with their resource identifiers
     for (auto &&nh : gm.nodes()) {
-        if (gm.metadata(nh).get<cv::gimpl::NodeType>().t == cv::gimpl::NodeType::DATA) {
-            const auto &d = gm.metadata(nh).get<cv::gimpl::Data>();
-            const auto rc = cv::gimpl::RcDesc{d.rc, d.shape, d.ctor};
+        if (gm.metadata(nh).get<NodeType>().t == NodeType::DATA) {
+            const auto &d = gm.metadata(nh).get<Data>();
+            const auto rc = RcDesc{d.rc, d.shape, d.ctor};
             if (set_in.count(rc) > 0) {
                 GAPI_DbgAssert(set_out.count(rc) == 0);
                 map_in[rc] = nh;
@@ -128,6 +129,12 @@ void relinkProto(ade::Graph& g) {
     proto.out_nhs.clear();
     for (auto &rc : proto.inputs)  { proto.in_nhs .push_back(map_in .at(rc)); }
     for (auto &rc : proto.outputs) { proto.out_nhs.push_back(map_out.at(rc)); }
+
+    // If a subgraph is being serialized it's possible that
+    // some of its in/out nodes are INTERNAL in the full graph.
+    // Set their storage apporpriately
+    for (auto &nh : proto.in_nhs)  { gm.metadata(nh).get<Data>().storage = Data::Storage::INPUT; }
+    for (auto &nh : proto.out_nhs) { gm.metadata(nh).get<Data>().storage = Data::Storage::OUTPUT; }
 }
 
 } // anonymous namespace
@@ -142,6 +149,13 @@ IOStream& operator<< (IOStream& os, const cv::Point &pt) {
     return os << pt.x << pt.y;
 }
 IIStream& operator>> (IIStream& is, cv::Point& pt) {
+    return is >> pt.x >> pt.y;
+}
+
+IOStream& operator<< (IOStream& os, const cv::Point2f &pt) {
+    return os << pt.x << pt.y;
+}
+IIStream& operator>> (IIStream& is, cv::Point2f& pt) {
     return is >> pt.x >> pt.y;
 }
 
@@ -165,12 +179,12 @@ IOStream& operator<< (IOStream& os, const cv::Scalar &s) {
 IIStream& operator>> (IIStream& is, cv::Scalar& s) {
     return is >> s.val[0] >> s.val[1] >> s.val[2] >> s.val[3];
 }
-IOStream& operator<< (IOStream& os, const cv::RMat&) {
-    util::throw_error(std::logic_error("Serialization of RMat is not supported"));
+IOStream& operator<< (IOStream& os, const cv::RMat& mat) {
+    mat.serialize(os);
     return os;
 }
 IIStream& operator>> (IIStream& is, cv::RMat&) {
-    util::throw_error(std::logic_error("Serialization of RMat is not supported"));
+    util::throw_error(std::logic_error("operator>> for RMat should never be called"));
     return is;
 }
 
@@ -331,8 +345,13 @@ IIStream& operator>> (IIStream& is,       cv::gapi::wip::draw::Line &l) {
 
 IOStream& operator<< (IOStream& os, const cv::GCompileArg& arg)
 {
+    ByteMemoryOutStream tmpS;
+    arg.serialize(tmpS);
+    std::vector<char> data = tmpS.data();
+
     os << arg.tag;
-    arg.serialize(os);
+    os << data;
+
     return os;
 }
 
@@ -504,17 +523,17 @@ IOStream& operator<< (IOStream& os, const cv::GArg &arg) {
         GAPI_Assert(arg.kind == cv::detail::ArgKind::OPAQUE_VAL);
         GAPI_Assert(arg.opaque_kind != cv::detail::OpaqueKind::CV_UNKNOWN);
         switch (arg.opaque_kind) {
-        case cv::detail::OpaqueKind::CV_BOOL:   os << arg.get<bool>();         break;
-        case cv::detail::OpaqueKind::CV_INT:    os << arg.get<int>();          break;
-        case cv::detail::OpaqueKind::CV_UINT64: os << arg.get<uint64_t>();     break;
-        case cv::detail::OpaqueKind::CV_DOUBLE: os << arg.get<double>();       break;
-        case cv::detail::OpaqueKind::CV_FLOAT:  os << arg.get<float>();        break;
-        case cv::detail::OpaqueKind::CV_STRING: os << arg.get<std::string>();  break;
-        case cv::detail::OpaqueKind::CV_POINT:  os << arg.get<cv::Point>();    break;
-        case cv::detail::OpaqueKind::CV_SIZE:   os << arg.get<cv::Size>();     break;
-        case cv::detail::OpaqueKind::CV_RECT:   os << arg.get<cv::Rect>();     break;
-        case cv::detail::OpaqueKind::CV_SCALAR: os << arg.get<cv::Scalar>();   break;
-        case cv::detail::OpaqueKind::CV_MAT:    os << arg.get<cv::Mat>();      break;
+        case cv::detail::OpaqueKind::CV_BOOL:    os << arg.get<bool>();         break;
+        case cv::detail::OpaqueKind::CV_INT:     os << arg.get<int>();          break;
+        case cv::detail::OpaqueKind::CV_UINT64:  os << arg.get<uint64_t>();     break;
+        case cv::detail::OpaqueKind::CV_DOUBLE:  os << arg.get<double>();       break;
+        case cv::detail::OpaqueKind::CV_FLOAT:   os << arg.get<float>();        break;
+        case cv::detail::OpaqueKind::CV_STRING:  os << arg.get<std::string>();  break;
+        case cv::detail::OpaqueKind::CV_POINT:   os << arg.get<cv::Point>();    break;
+        case cv::detail::OpaqueKind::CV_SIZE:    os << arg.get<cv::Size>();     break;
+        case cv::detail::OpaqueKind::CV_RECT:    os << arg.get<cv::Rect>();     break;
+        case cv::detail::OpaqueKind::CV_SCALAR:  os << arg.get<cv::Scalar>();   break;
+        case cv::detail::OpaqueKind::CV_MAT:     os << arg.get<cv::Mat>();      break;
         default: GAPI_Assert(false && "GArg: Unsupported (unknown?) opaque value type");
         }
     }
@@ -538,17 +557,18 @@ IIStream& operator>> (IIStream& is, cv::GArg &arg) {
         switch (arg.opaque_kind) {
 #define HANDLE_CASE(E,T) case cv::detail::OpaqueKind::CV_##E:           \
             { T t{}; is >> t; arg = (cv::GArg(t)); } break
-            HANDLE_CASE(BOOL   , bool);
-            HANDLE_CASE(INT    , int);
-            HANDLE_CASE(UINT64 , uint64_t);
-            HANDLE_CASE(DOUBLE , double);
-            HANDLE_CASE(FLOAT  , float);
-            HANDLE_CASE(STRING , std::string);
-            HANDLE_CASE(POINT  , cv::Point);
-            HANDLE_CASE(SIZE   , cv::Size);
-            HANDLE_CASE(RECT   , cv::Rect);
-            HANDLE_CASE(SCALAR , cv::Scalar);
-            HANDLE_CASE(MAT    , cv::Mat);
+            HANDLE_CASE(BOOL    , bool);
+            HANDLE_CASE(INT     , int);
+            HANDLE_CASE(UINT64  , uint64_t);
+            HANDLE_CASE(DOUBLE  , double);
+            HANDLE_CASE(FLOAT   , float);
+            HANDLE_CASE(STRING  , std::string);
+            HANDLE_CASE(POINT   , cv::Point);
+            HANDLE_CASE(POINT2F , cv::Point2f);
+            HANDLE_CASE(SIZE    , cv::Size);
+            HANDLE_CASE(RECT    , cv::Rect);
+            HANDLE_CASE(SCALAR  , cv::Scalar);
+            HANDLE_CASE(MAT     , cv::Mat);
 #undef HANDLE_CASE
         default: GAPI_Assert(false && "GArg: Unsupported (unknown?) opaque value type");
         }

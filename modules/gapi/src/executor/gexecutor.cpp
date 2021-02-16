@@ -12,6 +12,8 @@
 #include <ade/util/zip_range.hpp>
 
 #include <opencv2/gapi/opencv_includes.hpp>
+
+#include "api/gproto_priv.hpp" // ptr(GRunArgP)
 #include "executor/gexecutor.hpp"
 #include "compiler/passes/passes.hpp"
 
@@ -105,6 +107,9 @@ void bindInArgExec(Mag& mag, const RcDesc &rc, const GRunArg &arg)
         mag_rmat = util::get<cv::RMat>(arg); break;
     default: util::throw_error(std::logic_error("content type of the runtime argument does not match to resource description ?"));
     }
+    // FIXME: has to take extra care about meta here for this particuluar
+    // case, just because this function exists at all
+    mag.meta<cv::RMat>()[rc.id] = arg.meta;
 }
 
 void bindOutArgExec(Mag& mag, const RcDesc &rc, const GRunArgP &arg)
@@ -131,7 +136,7 @@ cv::GRunArgP getObjPtrExec(Mag& mag, const RcDesc &rc)
     {
         return getObjPtr(mag, rc);
     }
-    return GRunArgP(&mag.template slot<cv::RMat>()[rc.id]);
+    return GRunArgP(&mag.slot<cv::RMat>()[rc.id]);
 }
 
 void writeBackExec(const Mag& mag, const RcDesc &rc, GRunArgP &g_arg)
@@ -141,20 +146,49 @@ void writeBackExec(const Mag& mag, const RcDesc &rc, GRunArgP &g_arg)
         writeBack(mag, rc, g_arg);
         return;
     }
-    auto checkOutArgData = [&](const uchar* out_arg_data) {
-        //simply check that memory was not reallocated, i.e.
-        //both Mat and View pointing to the same memory
-        auto mag_data = mag.template slot<cv::RMat>().at(rc.id).get<RMatAdapter>()->data();
-        GAPI_Assert((out_arg_data == mag_data) && " data for output parameters was reallocated ?");
-    };
 
     switch (g_arg.index())
     {
-    case GRunArgP::index_of<cv::Mat*>() : checkOutArgData(util::get<cv::Mat*>(g_arg)->data); break;
+    case GRunArgP::index_of<cv::Mat*>() : {
+        // If there is a copy intrinsic at the end of the graph
+        // we need to actualy copy the data to the user buffer
+        // since output runarg was optimized to simply point
+        // to the input of the copy kernel
+        // FIXME:
+        // Rework, find a better way to check if there should be
+        // a real copy (add a pass to StreamingBackend?)
+        auto& out_mat = *util::get<cv::Mat*>(g_arg);
+        const auto& rmat = mag.template slot<cv::RMat>().at(rc.id);
+        auto mag_data = rmat.get<RMatAdapter>()->data();
+        if (out_mat.data != mag_data) {
+            auto view = rmat.access(RMat::Access::R);
+            asMat(view).copyTo(out_mat);
+        }
+        break;
+    }
     case GRunArgP::index_of<cv::RMat*>() : /* do nothing */ break;
     default: util::throw_error(std::logic_error("content type of the runtime argument does not match to resource description ?"));
     }
 }
+
+void assignMetaStubExec(Mag& mag, const RcDesc &rc, const cv::GRunArg::Meta &meta) {
+    switch (rc.shape)
+    {
+    case GShape::GARRAY:  mag.meta<cv::detail::VectorRef>()[rc.id] = meta; break;
+    case GShape::GOPAQUE: mag.meta<cv::detail::OpaqueRef>()[rc.id] = meta; break;
+    case GShape::GSCALAR: mag.meta<cv::Scalar>()[rc.id]            = meta; break;
+    case GShape::GFRAME:  mag.meta<cv::MediaFrame>()[rc.id]        = meta; break;
+    case GShape::GMAT:
+        mag.meta<cv::Mat>() [rc.id] = meta;
+        mag.meta<cv::RMat>()[rc.id] = meta;
+#if !defined(GAPI_STANDALONE)
+        mag.meta<cv::UMat>()[rc.id] = meta;
+#endif
+        break;
+    default: util::throw_error(std::logic_error("Unsupported GShape type")); break;
+    }
+}
+
 } // anonymous namespace
 }}} // namespace cv::gimpl::magazine
 
@@ -208,7 +242,10 @@ void cv::gimpl::GExecutor::initResource(const ade::NodeHandle & nh, const ade::N
     case GShape::GOPAQUE:
         // Constructed on Reset, do nothing here
         break;
-
+    case GShape::GFRAME: {
+        // Should be defined by backend, do nothing here
+        break;
+    }
     default:
         GAPI_Assert(false);
     }
@@ -231,11 +268,28 @@ public:
 class cv::gimpl::GExecutor::Output final: public cv::gimpl::GIslandExecutable::IOutput
 {
     cv::gimpl::Mag &mag;
-    virtual GRunArgP get(int idx) override { return magazine::getObjPtrExec(mag, desc()[idx]); }
-    virtual void post(GRunArgP&&) override { } // Do nothing here
-    virtual void post(EndOfStream&&) override {} // Do nothing here too
+    std::unordered_map<const void*, int> out_idx;
+
+    GRunArgP get(int idx) override
+    {
+        auto r = magazine::getObjPtrExec(mag, desc()[idx]);
+        // Remember the output port for this output object
+        out_idx[cv::gimpl::proto::ptr(r)] = idx;
+        return r;
+    }
+    void post(GRunArgP&&) override { } // Do nothing here
+    void post(EndOfStream&&) override {} // Do nothing here too
+    void meta(const GRunArgP &out, const GRunArg::Meta &m) override
+    {
+        const auto idx = out_idx.at(cv::gimpl::proto::ptr(out));
+        magazine::assignMetaStubExec(mag, desc()[idx], m);
+    }
 public:
-    Output(cv::gimpl::Mag &m, const std::vector<RcDesc> &rcs) : mag(m) { set(rcs); }
+    Output(cv::gimpl::Mag &m, const std::vector<RcDesc> &rcs)
+        : mag(m)
+    {
+        set(rcs);
+    }
 };
 
 void cv::gimpl::GExecutor::run(cv::gimpl::GRuntimeArgs &&args)
@@ -330,7 +384,7 @@ void cv::gimpl::GExecutor::run(cv::gimpl::GRuntimeArgs &&args)
     // Run the script
     for (auto &op : m_ops)
     {
-        // (5)
+        // (5), (6)
         Input i{m_res, op.in_objects};
         Output o{m_res, op.out_objects};
         op.isl_exec->run(i, o);

@@ -351,8 +351,6 @@ public:
 
     STDMETHODIMP OnReadSample(HRESULT hrStatus, DWORD dwStreamIndex, DWORD dwStreamFlags, LONGLONG llTimestamp, IMFSample *pSample) CV_OVERRIDE
     {
-        CV_UNUSED(llTimestamp);
-
         HRESULT hr = 0;
         cv::AutoLock lock(m_mutex);
 
@@ -365,6 +363,7 @@ public:
                 {
                     CV_LOG_DEBUG(NULL, "videoio(MSMF): drop frame (not processed)");
                 }
+                m_lastSampleTimestamp = llTimestamp;
                 m_lastSample = pSample;
             }
         }
@@ -444,6 +443,7 @@ public:
 
     IMFSourceReader *m_reader;
     DWORD m_dwStreamIndex;
+    LONGLONG m_lastSampleTimestamp;
     _ComPtr<IMFSample>  m_lastSample;
 };
 
@@ -917,6 +917,7 @@ bool CvCapture_MSMF::grabFrame()
             CV_LOG_WARNING(NULL, "videoio(MSMF): EOS signal. Capture stream is lost");
             return false;
         }
+        sampleTime = reader->m_lastSampleTimestamp;
         return true;
     }
     else if (isOpen)
@@ -1679,6 +1680,8 @@ cv::Ptr<cv::IVideoWriter> cv::cvCreateVideoWriter_MSMF( const std::string& filen
 
 #if defined(BUILD_PLUGIN)
 
+#define ABI_VERSION 0
+#define API_VERSION 0
 #include "plugin_api.hpp"
 
 namespace cv {
@@ -1862,36 +1865,36 @@ CvResult CV_API_CALL cv_writer_write(CvPluginWriter handle, const unsigned char*
     }
 }
 
-static const OpenCV_VideoIO_Plugin_API_preview plugin_api_v0 =
+static const OpenCV_VideoIO_Plugin_API_preview plugin_api =
 {
     {
         sizeof(OpenCV_VideoIO_Plugin_API_preview), ABI_VERSION, API_VERSION,
         CV_VERSION_MAJOR, CV_VERSION_MINOR, CV_VERSION_REVISION, CV_VERSION_STATUS,
         "Microsoft Media Foundation OpenCV Video I/O plugin"
     },
-    /*  1*/CAP_MSMF,
-    /*  2*/cv_capture_open,
-    /*  3*/cv_capture_release,
-    /*  4*/cv_capture_get_prop,
-    /*  5*/cv_capture_set_prop,
-    /*  6*/cv_capture_grab,
-    /*  7*/cv_capture_retrieve,
-    /*  8*/cv_writer_open,
-    /*  9*/cv_writer_release,
-    /* 10*/cv_writer_get_prop,
-    /* 11*/cv_writer_set_prop,
-    /* 12*/cv_writer_write
+    {
+        /*  1*/CAP_MSMF,
+        /*  2*/cv_capture_open,
+        /*  3*/cv_capture_release,
+        /*  4*/cv_capture_get_prop,
+        /*  5*/cv_capture_set_prop,
+        /*  6*/cv_capture_grab,
+        /*  7*/cv_capture_retrieve,
+        /*  8*/cv_writer_open,
+        /*  9*/cv_writer_release,
+        /* 10*/cv_writer_get_prop,
+        /* 11*/cv_writer_set_prop,
+        /* 12*/cv_writer_write
+    }
 };
 
 } // namespace
 
 const OpenCV_VideoIO_Plugin_API_preview* opencv_videoio_plugin_init_v0(int requested_abi_version, int requested_api_version, void* /*reserved=NULL*/) CV_NOEXCEPT
 {
-    if (requested_abi_version != 0)
-        return NULL;
-    if (requested_api_version != 0)
-        return NULL;
-    return &cv::plugin_api_v0;
+    if (requested_abi_version == ABI_VERSION && requested_api_version <= API_VERSION)
+        return &cv::plugin_api;
+    return NULL;
 }
 
 #endif // BUILD_PLUGIN

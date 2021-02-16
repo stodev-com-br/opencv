@@ -11,6 +11,8 @@
 #include <opencv2/gapi/imgproc.hpp>
 #include "gapi_imgproc_tests.hpp"
 
+#include "gapi_imgproc_tests_common.hpp"
+
 namespace opencv_test
 {
 
@@ -290,6 +292,29 @@ TEST_P(Dilate3x3Test, AccuracyTest)
     }
 }
 
+TEST_P(MorphologyExTest, AccuracyTest)
+{
+    cv::MorphShapes defShape = cv::MORPH_RECT;
+    int defKernSize = 3;
+    cv::Mat kernel = cv::getStructuringElement(defShape, cv::Size(defKernSize, defKernSize));
+
+    // G-API code //////////////////////////////////////////////////////////////
+    cv::GMat in;
+    auto out = cv::gapi::morphologyEx(in, op, kernel);
+
+    cv::GComputation c(in, out);
+    c.apply(in_mat1, out_mat_gapi, getCompileArgs());
+    // OpenCV code /////////////////////////////////////////////////////////////
+    {
+        cv::morphologyEx(in_mat1, out_mat_ocv, op, kernel);
+    }
+    // Comparison //////////////////////////////////////////////////////////////
+    {
+        EXPECT_TRUE(cmpF(out_mat_gapi, out_mat_ocv));
+        EXPECT_EQ(out_mat_gapi.size(), sz);
+    }
+}
+
 TEST_P(SobelTest, AccuracyTest)
 {
     // G-API code //////////////////////////////////////////////////////////////
@@ -445,6 +470,130 @@ TEST_P(GoodFeaturesTest, AccuracyTest)
     {
         EXPECT_TRUE(cmpF(outVecGAPI, outVecOCV));
     }
+}
+
+TEST_P(FindContoursNoOffsetTest, AccuracyTest)
+{
+    findContoursTestBody(sz, type, mode, method, cmpF, getCompileArgs());
+}
+
+TEST_P(FindContoursOffsetTest, AccuracyTest)
+{
+    const cv::Size sz(1280, 720);
+    const MatType2 type = CV_8UC1;
+    const cv::RetrievalModes mode = cv::RETR_EXTERNAL;
+    const cv::ContourApproximationModes method = cv::CHAIN_APPROX_NONE;
+    const CompareMats cmpF = AbsExact().to_compare_obj();
+    const cv::Point offset(15, 15);
+
+    findContoursTestBody(sz, type, mode, method, cmpF, getCompileArgs(), offset);
+}
+
+TEST_P(FindContoursHNoOffsetTest, AccuracyTest)
+{
+    findContoursTestBody<HIERARCHY>(sz, type, mode, method, cmpF, getCompileArgs());
+}
+
+TEST_P(FindContoursHOffsetTest, AccuracyTest)
+{
+    const cv::Size sz(1280, 720);
+    const MatType2 type = CV_8UC1;
+    const cv::RetrievalModes mode = cv::RETR_EXTERNAL;
+    const cv::ContourApproximationModes method = cv::CHAIN_APPROX_NONE;
+    const CompareMats cmpF = AbsExact().to_compare_obj();
+    const cv::Point offset(15, 15);
+    std::vector<std::vector<cv::Point>> outCtsOCV,  outCtsGAPI;
+    std::vector<cv::Vec4i>              outHierOCV, outHierGAPI;
+
+    findContoursTestBody<HIERARCHY>(sz, type, mode, method, cmpF, getCompileArgs(), offset);
+}
+
+TEST_P(BoundingRectMatTest, AccuracyTest)
+{
+    if (initByVector)
+    {
+        initMatByPointsVectorRandU<cv::Point_>(type, sz, dtype);
+    }
+    else
+    {
+        initMatrixRandU(type, sz, dtype);
+    }
+    boundingRectTestBody(in_mat1, cmpF, getCompileArgs());
+}
+
+TEST_P(BoundingRectVector32STest, AccuracyTest)
+
+{
+    std::vector<cv::Point2i> in_vector;
+    initPointsVectorRandU(sz.width, in_vector);
+
+    boundingRectTestBody(in_vector, cmpF, getCompileArgs());
+}
+
+TEST_P(BoundingRectVector32FTest, AccuracyTest)
+{
+    std::vector<cv::Point2f> in_vector;
+    initPointsVectorRandU(sz.width, in_vector);
+
+    boundingRectTestBody(in_vector, cmpF, getCompileArgs());
+}
+
+TEST_P(FitLine2DMatVectorTest, AccuracyTest)
+{
+    fitLineTestBody(in_mat1, distType, cmpF, getCompileArgs());
+}
+
+TEST_P(FitLine2DVector32STest, AccuracyTest)
+{
+    std::vector<cv::Point2i> in_vec;
+    initPointsVectorRandU(sz.width, in_vec);
+
+    fitLineTestBody(in_vec, distType, cmpF, getCompileArgs());
+}
+
+TEST_P(FitLine2DVector32FTest, AccuracyTest)
+{
+    std::vector<cv::Point2f> in_vec;
+    initPointsVectorRandU(sz.width, in_vec);
+
+    fitLineTestBody(in_vec, distType, cmpF, getCompileArgs());
+}
+
+TEST_P(FitLine2DVector64FTest, AccuracyTest)
+{
+    std::vector<cv::Point2d> in_vec;
+    initPointsVectorRandU(sz.width, in_vec);
+
+    fitLineTestBody(in_vec, distType, cmpF, getCompileArgs());
+}
+
+TEST_P(FitLine3DMatVectorTest, AccuracyTest)
+{
+    fitLineTestBody(in_mat1, distType, cmpF, getCompileArgs());
+}
+
+TEST_P(FitLine3DVector32STest, AccuracyTest)
+{
+    std::vector<cv::Point3i> in_vec;
+    initPointsVectorRandU(sz.width, in_vec);
+
+    fitLineTestBody(in_vec, distType, cmpF, getCompileArgs());
+}
+
+TEST_P(FitLine3DVector32FTest, AccuracyTest)
+{
+    std::vector<cv::Point3f> in_vec;
+    initPointsVectorRandU(sz.width, in_vec);
+
+    fitLineTestBody(in_vec, distType, cmpF, getCompileArgs());
+}
+
+TEST_P(FitLine3DVector64FTest, AccuracyTest)
+{
+    std::vector<cv::Point3d> in_vec;
+    initPointsVectorRandU(sz.width, in_vec);
+
+    fitLineTestBody(in_vec, distType, cmpF, getCompileArgs());
 }
 
 TEST_P(BGR2RGBTest, AccuracyTest)
