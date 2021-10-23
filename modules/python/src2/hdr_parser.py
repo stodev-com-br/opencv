@@ -53,13 +53,13 @@ class CppHeaderParser(object):
     def get_macro_arg(self, arg_str, npos):
         npos2 = npos3 = arg_str.find("(", npos)
         if npos2 < 0:
-            print("Error: no arguments for the macro at %d" % (self.lineno,))
+            print("Error: no arguments for the macro at %s:%d" % (self.hname, self.lineno))
             sys.exit(-1)
         balance = 1
         while 1:
             t, npos3 = self.find_next_token(arg_str, ['(', ')'], npos3+1)
             if npos3 < 0:
-                print("Error: no matching ')' in the macro call at %d" % (self.lineno,))
+                print("Error: no matching ')' in the macro call at %s:%d" % (self.hname, self.lineno))
                 sys.exit(-1)
             if t == '(':
                 balance += 1
@@ -166,7 +166,7 @@ class CppHeaderParser(object):
                 angle_stack.append(0)
             elif w == "," or w == '>':
                 if not angle_stack:
-                    print("Error at %d: argument contains ',' or '>' not within template arguments" % (self.lineno,))
+                    print("Error at %s:%d: argument contains ',' or '>' not within template arguments" % (self.hname, self.lineno))
                     sys.exit(-1)
                 if w == ",":
                     arg_type += "_and_"
@@ -196,7 +196,7 @@ class CppHeaderParser(object):
             p1 = arg_name.find("[")
             p2 = arg_name.find("]",p1+1)
             if p2 < 0:
-                print("Error at %d: no closing ]" % (self.lineno,))
+                print("Error at %s:%d: no closing ]" % (self.hname, self.lineno))
                 sys.exit(-1)
             counter_str = arg_name[p1+1:p2].strip()
             if counter_str == "":
@@ -260,6 +260,8 @@ class CppHeaderParser(object):
             l = l.replace("CV_EXPORTS_W_SIMPLE", "")
             modlist.append("/Simple")
         npos = l.find("CV_EXPORTS_AS")
+        if npos < 0:
+            npos = l.find('CV_WRAP_AS')
         if npos >= 0:
             macro_arg, npos3 = self.get_macro_arg(l, npos)
             modlist.append("=" + macro_arg)
@@ -435,11 +437,18 @@ class CppHeaderParser(object):
         # filter off some common prefixes, which are meaningless for Python wrappers.
         # note that we do not strip "static" prefix, which does matter;
         # it means class methods, not instance methods
-        decl_str = self.batch_replace(decl_str, [("static inline", ""), ("inline", ""), ("explicit ", ""),
-                                                 ("CV_EXPORTS_W", ""), ("CV_EXPORTS", ""), ("CV_CDECL", ""),
-                                                 ("CV_WRAP ", " "), ("CV_INLINE", ""),
-                                                 ("CV_DEPRECATED", ""), ("CV_DEPRECATED_EXTERNAL", "")]).strip()
-
+        decl_str = self.batch_replace(decl_str, [("static inline", ""),
+                                                 ("inline", ""),
+                                                 ("explicit ", ""),
+                                                 ("CV_EXPORTS_W", ""),
+                                                 ("CV_EXPORTS", ""),
+                                                 ("CV_CDECL", ""),
+                                                 ("CV_WRAP ", " "),
+                                                 ("CV_INLINE", ""),
+                                                 ("CV_DEPRECATED", ""),
+                                                 ("CV_DEPRECATED_EXTERNAL", ""),
+                                                 ("CV_NODISCARD_STD", ""),
+                                                 ("CV_NODISCARD", "")]).strip()
 
         if decl_str.strip().startswith('virtual'):
             virtual_method = True
@@ -829,6 +838,8 @@ class CppHeaderParser(object):
                     ("GAPI_EXPORTS_W", "CV_EXPORTS_W"),
                     ("GAPI_EXPORTS_W_SIMPLE","CV_EXPORTS_W_SIMPLE"),
                     ("GAPI_WRAP", "CV_WRAP"),
+                    ("GAPI_PROP", "CV_PROP"),
+                    ("GAPI_PROP_RW", "CV_PROP_RW"),
                     ('defined(GAPI_STANDALONE)', '0'),
                 ])
 
@@ -841,7 +852,11 @@ class CppHeaderParser(object):
                     continue
                 state = SCAN
                 l = re.sub(r'//(.+)?', '', l).strip()  # drop // comment
-                if l == '#if 0' or l == '#if defined(__OPENCV_BUILD)' or l == '#ifdef __OPENCV_BUILD':
+                if l in [
+                    '#if 0',
+                    '#if defined(__OPENCV_BUILD)', '#ifdef __OPENCV_BUILD',
+                    '#if !defined(OPENCV_BINDING_PARSER)', '#ifndef OPENCV_BINDING_PARSER',
+                ]:
                     state = DIRECTIVE_IF_0
                     depth_if_0 = 1
                 continue
@@ -971,7 +986,8 @@ class CppHeaderParser(object):
                                 has_mat = len(list(filter(lambda x: x[0] in {"Mat", "vector_Mat"}, args))) > 0
                                 if has_mat:
                                     _, _, _, gpumat_decl = self.parse_stmt(stmt, token, mat="cuda::GpuMat", docstring=docstring)
-                                    decls.append(gpumat_decl)
+                                    if gpumat_decl != decl:
+                                        decls.append(gpumat_decl)
 
                             if self._generate_umat_decls:
                                 # If function takes as one of arguments Mat or vector<Mat> - we want to create the
@@ -980,7 +996,8 @@ class CppHeaderParser(object):
                                 has_mat = len(list(filter(lambda x: x[0] in {"Mat", "vector_Mat"}, args))) > 0
                                 if has_mat:
                                     _, _, _, umat_decl = self.parse_stmt(stmt, token, mat="UMat", docstring=docstring)
-                                    decls.append(umat_decl)
+                                    if umat_decl != decl:
+                                        decls.append(umat_decl)
 
                         docstring = ""
                     if stmt_type == "namespace":

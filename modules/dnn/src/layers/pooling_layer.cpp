@@ -220,7 +220,9 @@ public:
 #endif
         if (backendId == DNN_BACKEND_INFERENCE_ENGINE_NGRAPH)
         {
-            return !computeMaxIdx && type != STOCHASTIC && kernel_size.size() > 1;
+#ifdef HAVE_DNN_NGRAPH
+            return !computeMaxIdx && type != STOCHASTIC && kernel_size.size() > 1 && (kernel_size.size() != 3 || !isArmComputePlugin());
+#endif
         }
         else if (backendId == DNN_BACKEND_OPENCV)
         {
@@ -1323,6 +1325,23 @@ public:
         CV_Assert(inputs[0][dims - 1] > 0 && inputs[0][dims - 2] > 0);
         shapesInitialized = true;
         return true;
+    }
+
+    virtual bool tryQuantize(const std::vector<std::vector<float> > &scales,
+                             const std::vector<std::vector<int> > &zeropoints, LayerParams& params) CV_OVERRIDE
+    {
+        if (type == MAX && !computeMaxIdx)
+        {
+            return true;
+        }
+        else if (type == AVE || type == SUM)
+        {
+            float multiplier = scales[0][0] / scales[1][0];
+            params.set("multiplier", multiplier);
+            params.set("input_zeropoint", zeropoints[0][0]);
+            return true;
+        }
+        return false;
     }
 
     virtual int64 getFLOPS(const std::vector<MatShape> &inputs,

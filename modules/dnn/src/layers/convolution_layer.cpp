@@ -48,6 +48,7 @@
 #include "../ie_ngraph.hpp"
 #include "../op_vkcom.hpp"
 
+#include <opencv2/core/utils/configuration.private.hpp>
 #include <opencv2/core/utils/logger.hpp>
 
 #include "opencv2/core/hal/hal.hpp"
@@ -324,10 +325,13 @@ public:
 #ifdef HAVE_INF_ENGINE
         if (backendId == DNN_BACKEND_INFERENCE_ENGINE_NN_BUILDER_2019 || backendId == DNN_BACKEND_INFERENCE_ENGINE_NGRAPH)
         {
-            if (ksize == 1)
+            bool isArmTarget = preferableTarget == DNN_TARGET_CPU && isArmComputePlugin();
+            if (isArmTarget && blobs.empty())
                 return false;
+            if (ksize == 1)
+                return isArmTarget;
             if (ksize == 3)
-                return preferableTarget == DNN_TARGET_CPU;
+                return preferableTarget != DNN_TARGET_MYRIAD && !isArmTarget;
             bool isMyriad = preferableTarget == DNN_TARGET_MYRIAD || preferableTarget == DNN_TARGET_HDDL;
             if ((backendId == DNN_BACKEND_INFERENCE_ENGINE_NN_BUILDER_2019 || !isMyriad) && blobs.empty())
                 return false;
@@ -805,7 +809,7 @@ public:
         CV_Assert_N(inputs.size() >= 1, nodes.size() >= 1);
         auto& ieInpNode = nodes[0].dynamicCast<InfEngineNgraphNode>()->node;
         std::vector<size_t> dims = ieInpNode->get_shape();
-        CV_Assert(dims.size() == 4 || dims.size() == 5);
+        CV_Check(dims.size(), dims.size() >= 3 && dims.size() <= 5, "");
         std::shared_ptr<ngraph::Node> ieWeights = nodes.size() > 1 ? nodes[1].dynamicCast<InfEngineNgraphNode>()->node : nullptr;
         if (nodes.size() > 1)
             CV_Assert(ieWeights);  // dynamic_cast should not fail
@@ -843,7 +847,7 @@ public:
         else
         {
             auto shape = std::make_shared<ngraph::op::Constant>(ngraph::element::i64,
-                             ngraph::Shape{kernel_shape.size()}, kernel_shape.data());
+                             ngraph::Shape{kernel_shape.size()}, std::vector<int64_t>(kernel_shape.begin(), kernel_shape.end()));
             ieWeights  = std::make_shared<ngraph::op::v1::Reshape>(ieWeights, shape, true);
         }
 
@@ -878,7 +882,7 @@ public:
             if (nodes.size() == 3)
             {
                 auto bias_shape = std::make_shared<ngraph::op::Constant>(ngraph::element::i64,
-                                    ngraph::Shape{shape.size()}, shape.data());
+                                    ngraph::Shape{shape.size()}, std::vector<int64_t>(shape.begin(), shape.end()));
                 bias = std::make_shared<ngraph::op::v1::Reshape>(nodes[2].dynamicCast<InfEngineNgraphNode>()->node, bias_shape, true);
             }
             else
@@ -911,11 +915,12 @@ public:
         bool useAVX;
         bool useAVX2;
         bool useAVX512;
+        bool useRVV;
         int blk_size_cn;
 
         ParallelConv()
             : input_(0), weights_(0), output_(0), ngroups_(0), nstripes_(0),
-              biasvec_(0), reluslope_(0), activ_(0), is1x1_(false), useAVX(false), useAVX2(false), useAVX512(false)
+              biasvec_(0), reluslope_(0), activ_(0), is1x1_(false), useAVX(false), useAVX2(false), useAVX512(false), useRVV(false)
             , blk_size_cn(0)
         {}
 
@@ -973,6 +978,7 @@ public:
             p.useAVX    = checkHardwareSupport(CPU_AVX)  && isConv2D;
             p.useAVX2   = checkHardwareSupport(CPU_AVX2) && isConv2D;
             p.useAVX512 = CV_CPU_HAS_SUPPORT_AVX512_SKX  && isConv2D;
+            p.useRVV   = checkHardwareSupport(CPU_RVV) && isConv2D;
 
             int kernel_d = isConv3D? kernel_size[0] : 1;
             int kernel_h = isConv1D? 1 : kernel_size[kernel_size.size() - 2];
@@ -1174,6 +1180,13 @@ public:
                                     biasptr, relu, inptr_, height, width, outptr_, out_d, outH, outW);
                             else
                         #endif
+                        #if CV_TRY_RVV
+                            if(useRVV)
+                                opt_RVV::fastDepthwiseConv(wptr, kernel_h, kernel_w,
+                                    stride_h, stride_w, dilation_h, dilation_w, pad_t, pad_l,
+                                    biasptr, relu, inptr_, height, width, outptr_, out_d, outH, outW);
+                            else
+                        #endif
                             {
                                 const float w00_ = wptr[0], w01_ = wptr[1], w02_ = wptr[2],
                                             w10 = wptr[3], w11 = wptr[4], w12 = wptr[5],
@@ -1247,7 +1260,7 @@ public:
                                                              v20*vw20 + v21*vw21 + v22*vw22 + vbias;
                                             if (relu)
                                                 vout = v_select(vout > z, vout, vout*vrc);
-                                            vx_store(outptr + out_j, vout);
+                                            v_store(outptr + out_j, vout);
                                         }
                                     }
                                 #endif
@@ -1544,6 +1557,12 @@ public:
                                          outShape, bsz, vsz, vsz_a, relu, cn0 == 0);
                         else
                     #endif
+                    #if CV_TRY_RVV
+                        if(useRVV)
+                            opt_RVV::fastConv(wptr, wstep, biasptr, rowbuf0, data_out0 + ofs0,
+                                         outShape, bsz, vsz, vsz_a, relu, cn0 == 0);
+                        else
+                    #endif
                         for( int i = 0; i < outCn; i += 2 )
                         {
                             const float* wptr0 = wptr + i*wstep;
@@ -1718,7 +1737,26 @@ public:
             config.pad = pad;
             config.stride = stride;
             config.dilation = dilation;
+            if (inputs[0].dims != 4 && inputs[0].dims != umat_blobs[0].dims)
+            {
+                static bool bypassCheck = utils::getConfigurationParameterBool("OPENCV_OCL4DNN_CONVOLUTION_IGNORE_INPUT_DIMS_4_CHECK", false);
+                if (!bypassCheck)
+                {
+                    CV_LOG_ERROR(NULL, "DNN/OpenCL: Unsupported configuration: inputs[0].dims=" << inputs[0].dims << "  umat_blobs[0].dims=" << umat_blobs[0].dims
+                        << ". Consider reporting complete reproducer to https://github.com/opencv/opencv/issues/20833."
+                        << " You can skip this check temporary through OPENCV_OCL4DNN_CONVOLUTION_IGNORE_INPUT_DIMS_4_CHECK=1"
+                    );
+                    return false;
+                }
+            }
             config.group = inputs[0].size[1] / umat_blobs[0].size[1];
+            if (config.group < 1)  // config.group == 0 causes div by zero in ocl4dnn code
+            {
+                CV_LOG_WARNING(NULL, "DNN/OpenCL: Unsupported config.group=" << config.group
+                    << ". Consider reporting complete reproducer to https://github.com/opencv/opencv/issues/20833"
+                );
+                return false;
+            }
             config.bias_term = umat_blobs.size() == 2;
             config.use_half = use_half;
 
@@ -2065,6 +2103,48 @@ public:
     }
 #endif
 
+    virtual bool tryQuantize(const std::vector<std::vector<float> > &scales,
+                             const std::vector<std::vector<int> > &zeropoints, LayerParams& params) CV_OVERRIDE
+    {
+        // References - https://arxiv.org/pdf/1712.05877.pdf
+
+        // Quantized convolution with variable weights is not supported.
+        if (blobs.empty())
+            return false;
+
+        float inputScale = scales[0][0], outputScale = scales[1][0];
+        int inputZp = zeropoints[0][0];
+        params.set("input_zeropoint", inputZp);
+
+        Mat weightsQuantized(weightsMat.rows, weightsMat.cols, CV_8S);
+        Mat biasQuantized(1, numOutput, CV_32S);
+        Mat outputMultiplier(1, numOutput, CV_32F);
+        double realMin, realMax, weightsScale;
+
+        for( int i = 0; i < numOutput; i++ )
+        {
+            // Quantize weights
+            cv::minMaxIdx(weightsMat.row(i), &realMin, &realMax);
+            realMin = std::min(realMin, 0.0);
+            realMax = std::max(realMax, 0.0);
+            weightsScale = (realMax == realMin) ? 1.0 : std::max(-realMin, realMax)/127;
+            weightsMat.row(i).convertTo(weightsQuantized.row(i), CV_8S, 1.f/weightsScale);
+
+            // Quantize biases
+            float biasScale = inputScale * weightsScale;
+            biasQuantized.at<int>(i) = (int)std::round(biasvec[i]/biasScale) - inputZp*(cv::sum(weightsQuantized.row(i))[0]);
+
+            // Store multiplier
+            outputMultiplier.at<float>(i) = biasScale / outputScale;
+        }
+
+        params.blobs.clear();
+        params.blobs.push_back(weightsQuantized.reshape(1, shape(blobs[0])));
+        params.blobs.push_back(biasQuantized);
+        params.blobs.push_back(outputMultiplier);
+        return true;
+    }
+
     virtual int64 getFLOPS(const std::vector<MatShape> &inputs,
                            const std::vector<MatShape> &outputs) const CV_OVERRIDE
     {
@@ -2294,6 +2374,7 @@ public:
             useAVX = checkHardwareSupport(CPU_AVX);
             useAVX2 = checkHardwareSupport(CPU_AVX2);
             useAVX512 = CV_CPU_HAS_SUPPORT_AVX512_SKX;
+            useRVV = checkHardwareSupport(CPU_RVV);
         }
 
         void operator()(const Range& range_) const CV_OVERRIDE
@@ -2324,6 +2405,12 @@ public:
         #if CV_TRY_AVX
             if( useAVX )
                 opt_AVX::fastGEMM( aptr, astep, bptr, bstep, cptr, cstep, mmax, kmax, nmax );
+            else
+        #endif
+        #if CV_TRY_RVV
+            if( useRVV ) {
+                opt_RVV::fastGEMM( aptr, astep, bptr, bstep, cptr, cstep, mmax, kmax, nmax );
+            }
             else
         #endif
             for( m = 0; m < mmax; m += 2 )
@@ -2424,6 +2511,7 @@ public:
         bool useAVX;
         bool useAVX2;
         bool useAVX512;
+        bool useRVV;
     };
 
     class Col2ImInvoker : public cv::ParallelLoopBody

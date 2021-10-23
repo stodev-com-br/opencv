@@ -108,11 +108,36 @@ namespace cv { namespace dnn { namespace cuda4dnn { namespace csl { namespace de
 
     template <class T> __device__ T clamp(T value, T lower, T upper) { return min(max(value, lower), upper); }
 
+    template <class T> __device__ long lround(T value);
+    template <> inline __device__ long lround(double value) { return ::lround(value); }
+    template <> inline __device__ long lround(float value) { return lroundf(value); }
+
     template <class T> __device__ T round(T value);
     template <> inline __device__ double round(double value) { return ::round(value); }
     template <> inline __device__ float round(float value) { return roundf(value); }
 #if !defined(__CUDA_ARCH__) || (__CUDA_ARCH__ >= 530)
     template <> inline __device__ __half round(__half value) { return hrint(value); }
+#endif
+
+    template <class T> __device__ T floor(T value);
+    template <> inline __device__ double floor(double value) { return ::floor(value); }
+    template <> inline __device__ float floor(float value) { return floorf(value); }
+#if !defined(__CUDA_ARCH__) || (__CUDA_ARCH__ >= 530)
+    template <> inline __device__ __half floor(__half value) { return hfloor(value); }
+#endif
+
+    template <class T> __device__ T log(T value);
+    template <> inline __device__ double log(double value) { return ::log(value); }
+    template <> inline __device__ float log(float value) { return logf(value); }
+#if !defined(__CUDA_ARCH__) || (__CUDA_ARCH__ >= 530)
+    template <> inline __device__ __half log(__half value) { return hlog(value); }
+#endif
+
+    template <class T> __device__ T rint(T value);
+    template <> inline __device__ double rint(double value) { return ::rint(value); }
+    template <> inline __device__ float rint(float value) { return rintf(value); }
+#if !defined(__CUDA_ARCH__) || (__CUDA_ARCH__ >= 530)
+    template <> inline __device__ __half rint(__half value) { return hrint(value); }
 #endif
 
     template <class T> __device__ T ceil(T value);

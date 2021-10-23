@@ -10,10 +10,13 @@
 #include "../graph_simplifier.hpp"
 #include "onnx_graph_simplifier.hpp"
 
+#include <opencv2/core/utils/logger.hpp>
 #include <queue>
 
 namespace cv { namespace dnn {
 CV__DNN_INLINE_NS_BEGIN
+
+extern bool DNN_DIAGNOSTICS_RUN;
 
 // This wrapper can behave differently for fake input nodes and real graph nodes.
 class ONNXNodeWrapper : public ImportNodeWrapper
@@ -227,6 +230,27 @@ public:
         int shape = addNodeToMatch("Shape", input);
         int expand = addNodeToMatch("Expand", clip, shape);
         addNodeToMatch("Div", input, expand);
+        setFusedNode("Normalize", input);
+    }
+};
+
+class NormalizeSubgraph2_2 : public NormalizeSubgraphBase
+{
+public:
+    NormalizeSubgraph2_2()
+    {
+        int input = addNodeToMatch("");
+        int norm = addNodeToMatch("ReduceL2", input);
+
+        int min = addNodeToMatch("");
+        int max = addNodeToMatch("");
+        int clip = addNodeToMatch("Clip", norm, min, max);
+
+        int shape = addNodeToMatch("");
+        int expand = addNodeToMatch("Expand", clip, shape);
+
+        addNodeToMatch("Div", input, expand);
+
         setFusedNode("Normalize", input);
     }
 };
@@ -555,6 +579,7 @@ void simplifySubgraphs(opencv_onnx::GraphProto& net)
     subgraphs.push_back(makePtr<SoftMaxSubgraph>());
     subgraphs.push_back(makePtr<NormalizeSubgraph1>());
     subgraphs.push_back(makePtr<NormalizeSubgraph2>());
+    subgraphs.push_back(makePtr<NormalizeSubgraph2_2>());
     subgraphs.push_back(makePtr<NormalizeSubgraph3>());
     subgraphs.push_back(makePtr<BatchNormalizationSubgraph1>());
     subgraphs.push_back(makePtr<BatchNormalizationSubgraph2>());
@@ -569,7 +594,8 @@ void simplifySubgraphs(opencv_onnx::GraphProto& net)
 Mat getMatFromTensor(opencv_onnx::TensorProto& tensor_proto)
 {
     if (tensor_proto.raw_data().empty() && tensor_proto.float_data().empty() &&
-        tensor_proto.double_data().empty() && tensor_proto.int64_data().empty())
+        tensor_proto.double_data().empty() && tensor_proto.int64_data().empty() &&
+        tensor_proto.int32_data().empty())
         return Mat();
 
     opencv_onnx::TensorProto_DataType datatype = tensor_proto.data_type();
@@ -638,9 +664,36 @@ Mat getMatFromTensor(opencv_onnx::TensorProto& tensor_proto)
             convertInt64ToInt32(src, dst, blob.total());
         }
     }
+    else if (datatype == opencv_onnx::TensorProto_DataType_INT8 ||
+             datatype == opencv_onnx::TensorProto_DataType_UINT8)
+    {
+        // TODO : Add support for uint8 weights and acitvations. For now, converting uint8 tensors to int8.
+        int offset = datatype == opencv_onnx::TensorProto_DataType_INT8 ? 0 : -128;
+        int depth = datatype == opencv_onnx::TensorProto_DataType_INT8 ? CV_8S : CV_8U;
+
+        if (!tensor_proto.int32_data().empty())
+        {
+            const ::google::protobuf::RepeatedField<int32_t> field = tensor_proto.int32_data();
+            Mat(sizes, CV_32SC1, (void*)field.data()).convertTo(blob, CV_8S, 1.0, offset);
+        }
+        else
+        {
+            char* val = const_cast<char*>(tensor_proto.raw_data().c_str());
+            Mat(sizes, depth, val).convertTo(blob, CV_8S, 1.0, offset);
+        }
+    }
     else
-        CV_Error(Error::StsUnsupportedFormat, "Unsupported data type: " +
-                        opencv_onnx::TensorProto_DataType_Name(datatype));
+    {
+        std::string errorMsg = "Unsupported data type: " +
+                            opencv_onnx::TensorProto_DataType_Name(datatype);
+
+        if (!DNN_DIAGNOSTICS_RUN)
+        {
+            CV_Error(Error::StsUnsupportedFormat, errorMsg);
+        }
+        CV_LOG_ERROR(NULL, errorMsg);
+        return blob;
+    }
     if (tensor_proto.dims_size() == 0)
         blob.dims = 1;  // To force 1-dimensional cv::Mat for scalars.
     return blob;

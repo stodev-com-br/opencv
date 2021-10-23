@@ -2,7 +2,7 @@
 // It is subject to the license terms in the LICENSE file found in the top-level directory
 // of this distribution and at http://opencv.org/license.html.
 //
-// Copyright (C) 2018-2020 Intel Corporation
+// Copyright (C) 2018-2021 Intel Corporation
 
 #include "precomp.hpp"
 
@@ -60,6 +60,8 @@ template<typename T> using QueueClass = tbb::concurrent_bounded_queue<T>;
 template<typename T> using QueueClass = cv::gapi::own::concurrent_bounded_queue<T>;
 #endif // TBB
 
+#include "utils/itt.hpp"
+
 namespace IE = InferenceEngine;
 
 namespace {
@@ -104,8 +106,10 @@ inline IE::Layout toIELayout(const std::size_t ndims) {
 inline IE::Precision toIE(int depth) {
     switch (depth) {
     case CV_8U:  return IE::Precision::U8;
+    case CV_32S: return IE::Precision::I32;
     case CV_32F: return IE::Precision::FP32;
-    default:     GAPI_Assert(false && "Unsupported data type");
+    case CV_16F: return IE::Precision::FP16;
+    default:     GAPI_Assert(false && "IE. Unsupported data type");
     }
     return IE::Precision::UNSPECIFIED;
 }
@@ -113,7 +117,10 @@ inline int toCV(IE::Precision prec) {
     switch (prec) {
     case IE::Precision::U8:   return CV_8U;
     case IE::Precision::FP32: return CV_32F;
-    default:     GAPI_Assert(false && "Unsupported data type");
+    case IE::Precision::I32:  return CV_32S;
+    case IE::Precision::I64:  return CV_32S;
+    case IE::Precision::FP16: return CV_16F;
+    default:     GAPI_Assert(false && "IE. Unsupported data type");
     }
     return -1;
 }
@@ -132,7 +139,7 @@ inline IE::TensorDesc toIE(const cv::Mat &mat, cv::gapi::ie::TraitAs hint) {
         const size_t width    = mat.size().width;
 
         const size_t strideH  = mat.step1();
-        IE::BlockingDesc bdesc({1, channels, height, width} /* dims */,
+        IE::BlockingDesc bdesc({1, height, width, channels} /* blocking dims */,
                                {0, 2, 3, 1} /* order for NHWC   */,
                                0            /* offset           */,
                                {0, 0, 0, 0} /* offsets for dims */,
@@ -154,8 +161,10 @@ inline IE::Blob::Ptr wrapIE(const cv::Mat &mat, cv::gapi::ie::TraitAs hint) {
         case CV_##E: return IE::make_shared_blob<T>(tDesc, const_cast<T*>(mat.ptr<T>()))
         HANDLE(8U, uint8_t);
         HANDLE(32F, float);
+        HANDLE(32S, int);
+        HANDLE(16F, int16_t);
 #undef HANDLE
-    default: GAPI_Assert(false && "Unsupported data type");
+    default: GAPI_Assert(false && "IE. Unsupported data type");
     }
     return IE::Blob::Ptr{};
 }
@@ -189,8 +198,17 @@ inline void copyFromIE(const IE::Blob::Ptr &blob, MatType &mat) {
             break;
         HANDLE(U8, uint8_t);
         HANDLE(FP32, float);
+        HANDLE(I32, int);
+        HANDLE(FP16, cv::float16_t);
 #undef HANDLE
-    default: GAPI_Assert(false && "Unsupported data type");
+        case IE::Precision::I64: {
+            GAPI_LOG_WARNING(NULL, "INT64 isn't supported for cv::Mat. Conversion to INT32 is used.");
+            cv::gimpl::convertInt64ToInt32(blob->buffer().as<int64_t*>(),
+                                           reinterpret_cast<int*>(mat.data),
+                                           mat.total());
+            break;
+        }
+    default: GAPI_Assert(false && "IE. Unsupported data type");
     }
 }
 
@@ -206,20 +224,26 @@ struct IEUnit {
     IE::ExecutableNetwork this_network;
     cv::gimpl::ie::wrap::Plugin this_plugin;
 
+    InferenceEngine::RemoteContext::Ptr rctx = nullptr;
+
     explicit IEUnit(const cv::gapi::ie::detail::ParamDesc &pp)
         : params(pp) {
+        InferenceEngine::ParamMap* ctx_params =
+                            cv::util::any_cast<InferenceEngine::ParamMap>(&params.context_config);
+        if (ctx_params != nullptr) {
+            auto ie_core = cv::gimpl::ie::wrap::getCore();
+            rctx = ie_core.CreateContext(params.device_id, *ctx_params);
+        }
+
         if (params.kind == cv::gapi::ie::detail::ParamDesc::Kind::Load) {
             net = cv::gimpl::ie::wrap::readNetwork(params);
+            net.setBatchSize(params.batch_size);
             inputs  = net.getInputsInfo();
             outputs = net.getOutputsInfo();
         } else if (params.kind == cv::gapi::ie::detail::ParamDesc::Kind::Import) {
             this_plugin = cv::gimpl::ie::wrap::getPlugin(params);
             this_plugin.SetConfig(params.config);
-            this_network = cv::gimpl::ie::wrap::importNetwork(this_plugin, params);
-            // FIXME: ICNNetwork returns InputsDataMap/OutputsDataMap,
-            // but ExecutableNetwork returns ConstInputsDataMap/ConstOutputsDataMap
-            inputs  = cv::gimpl::ie::wrap::toInputsDataMap(this_network.GetInputsInfo());
-            outputs = cv::gimpl::ie::wrap::toOutputsDataMap(this_network.GetOutputsInfo());
+            this_network = cv::gimpl::ie::wrap::importNetwork(this_plugin, params, rctx);
             if (!params.reshape_table.empty() || !params.layer_names_to_reshape.empty()) {
                 GAPI_LOG_WARNING(NULL, "Reshape isn't supported for imported network");
             }
@@ -243,10 +267,18 @@ struct IEUnit {
                                                    + params.model_path));
         }
         if (params.num_in == 1u && params.input_names.empty()) {
-            params.input_names = { inputs.begin()->first };
+            if (params.kind == cv::gapi::ie::detail::ParamDesc::Kind::Load) {
+                params.input_names = { inputs.begin()->first };
+            } else {
+                params.input_names = { this_network.GetInputsInfo().begin()->first };
+            }
         }
         if (params.num_out == 1u && params.output_names.empty()) {
-            params.output_names = { outputs.begin()->first };
+            if (params.kind == cv::gapi::ie::detail::ParamDesc::Kind::Load) {
+                params.output_names = { outputs.begin()->first };
+            } else {
+                params.output_names = { this_network.GetOutputsInfo().begin()->first };
+            }
         }
         if (!params.reshape_table.empty()) {
             GAPI_Assert((params.reshape_table.size() + params.layer_names_to_reshape.size()) <=
@@ -263,7 +295,8 @@ struct IEUnit {
             // for loadNetwork they can be obtained by using readNetwork
             non_const_this->this_plugin  = cv::gimpl::ie::wrap::getPlugin(params);
             non_const_this->this_plugin.SetConfig(params.config);
-            non_const_this->this_network = cv::gimpl::ie::wrap::loadNetwork(non_const_this->this_plugin, net, params);
+            non_const_this->this_network = cv::gimpl::ie::wrap::loadNetwork(non_const_this->this_plugin,
+                                                                            net, params, rctx);
         }
 
         return {params, this_plugin, this_network};
@@ -465,7 +498,32 @@ using GConstGIEModel = ade::ConstTypedGraph
     , IECallable
     >;
 
+inline IE::Blob::Ptr extractRemoteBlob(IECallContext& ctx, std::size_t i) {
+    GAPI_Assert(ctx.inShape(i) == cv::GShape::GFRAME &&
+                "Remote blob is supported for MediaFrame only");
+
+    cv::util::any any_blob_params = ctx.inFrame(i).blobParams();
+    auto ie_core = cv::gimpl::ie::wrap::getCore();
+
+    using ParamType = std::pair<InferenceEngine::TensorDesc,
+                                InferenceEngine::ParamMap>;
+
+    ParamType* blob_params = cv::util::any_cast<ParamType>(&any_blob_params);
+    if (blob_params == nullptr) {
+        GAPI_Assert(false && "Incorrect type of blobParams: "
+                              "expected std::pair<InferenceEngine::TensorDesc,"
+                                                 "InferenceEngine::ParamMap>");
+    }
+
+    return ctx.uu.rctx->CreateBlob(blob_params->first,
+                                   blob_params->second);
+}
+
 inline IE::Blob::Ptr extractBlob(IECallContext& ctx, std::size_t i) {
+    if (ctx.uu.rctx != nullptr) {
+        return extractRemoteBlob(ctx, i);
+    }
+
     switch (ctx.inShape(i)) {
         case cv::GShape::GFRAME: {
             const auto& frame = ctx.inFrame(i);
@@ -480,6 +538,24 @@ inline IE::Blob::Ptr extractBlob(IECallContext& ctx, std::size_t i) {
     }
     GAPI_Assert(false);
 }
+
+
+static void setBlob(InferenceEngine::InferRequest&        req,
+                    cv::gapi::ie::detail::ParamDesc::Kind kind,
+                    const std::string&                    layer_name,
+                    IE::Blob::Ptr                         blob) {
+    // NB: In case importNetwork preprocessing must be
+    // passed as SetBlob argument.
+    if (kind == cv::gapi::ie::detail::ParamDesc::Kind::Load) {
+        req.SetBlob(layer_name, blob);
+    } else {
+        GAPI_Assert(kind == cv::gapi::ie::detail::ParamDesc::Kind::Import);
+        IE::PreProcessInfo info;
+        info.setResizeAlgorithm(IE::RESIZE_BILINEAR);
+        req.SetBlob(layer_name, blob, info);
+    }
+}
+
 } // anonymous namespace
 
 std::vector<InferenceEngine::InferRequest> cv::gimpl::ie::IECompiled::createInferRequests() {
@@ -518,10 +594,11 @@ public:
     explicit RequestPool(std::vector<InferenceEngine::InferRequest>&& requests);
 
     void execute(Task&& t);
-    void waitAndShutdown();
+    void waitAll();
 
 private:
     void callback(Task task, InferenceEngine::InferRequest& request, size_t id);
+    void setup();
 
     QueueClass<size_t>                         m_idle_ids;
     std::vector<InferenceEngine::InferRequest> m_requests;
@@ -530,10 +607,14 @@ private:
 // RequestPool implementation //////////////////////////////////////////////
 cv::gimpl::ie::RequestPool::RequestPool(std::vector<InferenceEngine::InferRequest>&& requests)
     : m_requests(std::move(requests)) {
-        for (size_t i = 0; i < m_requests.size(); ++i) {
-            m_idle_ids.push(i);
-        }
+        setup();
     }
+
+void cv::gimpl::ie::RequestPool::setup() {
+    for (size_t i = 0; i < m_requests.size(); ++i) {
+        m_idle_ids.push(i);
+    }
+}
 
 void cv::gimpl::ie::RequestPool::execute(cv::gimpl::ie::RequestPool::Task&& t) {
     size_t id = 0u;
@@ -550,16 +631,22 @@ void cv::gimpl::ie::RequestPool::callback(cv::gimpl::ie::RequestPool::Task task,
                                           InferenceEngine::InferRequest& request,
                                           size_t id) {
     task.callback(request);
+    // NB: IE::InferRequest keeps the callback until the new one is set.
+    // Since user's callback might keep resources that should be released,
+    // need to destroy its after execution.
+    // Let's set the empty one to cause the destruction of a callback.
+    request.SetCompletionCallback([](){});
     m_idle_ids.push(id);
 }
 
 // NB: Not thread-safe.
-void cv::gimpl::ie::RequestPool::waitAndShutdown() {
+void cv::gimpl::ie::RequestPool::waitAll() {
     // NB: It will be blocked if at least one request is busy.
     for (size_t i = 0; i < m_requests.size(); ++i) {
         size_t id = 0u;
         m_idle_ids.pop(id);
     }
+    setup();
 }
 
 // GCPUExcecutable implementation //////////////////////////////////////////////
@@ -620,7 +707,7 @@ void cv::gimpl::ie::GIEExecutable::run(cv::gimpl::GIslandExecutable::IInput  &in
     if (cv::util::holds_alternative<cv::gimpl::EndOfStream>(in_msg))
     {
         // (3) Wait until all passed task are done.
-        m_reqPool->waitAndShutdown();
+        m_reqPool->waitAll();
         out.post(cv::gimpl::EndOfStream{});
         return;
     }
@@ -659,7 +746,7 @@ void cv::gimpl::ie::GIEExecutable::run(cv::gimpl::GIslandExecutable::IInput  &in
     // (5) In non-streaming mode need to wait until the all tasks are done
     // FIXME: Is there more graceful way to handle this case ?
     if (!m_gm.metadata().contains<Streaming>()) {
-        m_reqPool->waitAndShutdown();
+        m_reqPool->waitAll();
     }
 }
 
@@ -739,6 +826,9 @@ static void configureInputInfo(const IE::InputInfo::Ptr& ii, const cv::GMetaArg 
 // to post outputs blobs (cv::GMat's).
 static void PostOutputs(InferenceEngine::InferRequest   &request,
                         std::shared_ptr<IECallContext>   ctx) {
+    GAPI_ITT_STATIC_LOCAL_HANDLE(ie_cb_post_outputs_hndl, "IE_async_callback_PostOutputs");
+    GAPI_ITT_AUTO_TRACE_GUARD(ie_cb_post_outputs_hndl);
+
     for (auto i : ade::util::iota(ctx->uu.params.num_out))
     {
         auto& out_mat = ctx->outMatR(i);
@@ -747,7 +837,6 @@ static void PostOutputs(InferenceEngine::InferRequest   &request,
         auto output = ctx->output(i);
         ctx->out.meta(output, ctx->input(0).meta);
         ctx->out.post(std::move(output));
-
     }
 }
 
@@ -829,25 +918,30 @@ struct Infer: public cv::detail::KernelTag {
         // meta order.
         GAPI_Assert(uu.params.input_names.size() == in_metas.size()
                     && "Known input layers count doesn't match input meta count");
-        for (auto &&it : ade::util::zip(ade::util::toRange(uu.params.input_names),
-                                        ade::util::toRange(in_metas))) {
-            const auto &input_name = std::get<0>(it);
-            auto       &&ii = uu.inputs.at(input_name);
-            const auto & mm = std::get<1>(it);
 
-            configureInputInfo(ii, mm);
-            if (uu.params.layer_names_to_reshape.find(input_name) !=
-                uu.params.layer_names_to_reshape.end()) {
-                configureInputReshapeByImage(ii, mm, input_reshape_table);
+        // NB: Configuring input precision and network reshape must be done
+        // only in the loadNetwork case.
+        if (uu.params.kind == cv::gapi::ie::detail::ParamDesc::Kind::Load) {
+            for (auto &&it : ade::util::zip(ade::util::toRange(uu.params.input_names),
+                                            ade::util::toRange(in_metas))) {
+                    const auto &input_name = std::get<0>(it);
+                    auto       &&ii = uu.inputs.at(input_name);
+                    const auto & mm = std::get<1>(it);
+
+                    configureInputInfo(ii, mm);
+                    if (uu.params.layer_names_to_reshape.find(input_name) !=
+                        uu.params.layer_names_to_reshape.end()) {
+                        configureInputReshapeByImage(ii, mm, input_reshape_table);
+                    }
+                    ii->getPreProcess().setResizeAlgorithm(IE::RESIZE_BILINEAR);
             }
-            ii->getPreProcess().setResizeAlgorithm(IE::RESIZE_BILINEAR);
-        }
 
-        // FIXME: This isn't the best place to call reshape function.
-        // Сorrect solution would be to do this in compile() method of network,
-        // but now input meta isn't passed to compile() method.
-        if (!input_reshape_table.empty()) {
-            const_cast<IE::CNNNetwork *>(&uu.net)->reshape(input_reshape_table);
+            // FIXME: This isn't the best place to call reshape function.
+            // Сorrect solution would be to do this in compile() method of network,
+            // but now input meta isn't passed to compile() method.
+            if (!input_reshape_table.empty()) {
+                const_cast<IE::CNNNetwork *>(&uu.net)->reshape(input_reshape_table);
+            }
         }
 
         // FIXME: It would be nice here to have an exact number of network's
@@ -879,7 +973,10 @@ struct Infer: public cv::detail::KernelTag {
                             // and redirect our data producers to this memory
                             // (A memory dialog comes to the picture again)
                             IE::Blob::Ptr this_blob = extractBlob(*ctx, i);
-                            req.SetBlob(ctx->uu.params.input_names[i], this_blob);
+                            setBlob(req,
+                                    ctx->uu.params.kind,
+                                    ctx->uu.params.input_names[i],
+                                    this_blob);
                         }
                         // FIXME: Should it be done by kernel ?
                         // What about to do that in RequestPool ?
@@ -911,22 +1008,26 @@ struct InferROI: public cv::detail::KernelTag {
         GAPI_Assert(1u == uu.params.input_names.size());
         GAPI_Assert(2u == in_metas.size());
 
-        // 0th is ROI, 1st is input image
-        const auto &input_name = uu.params.input_names.at(0);
-        auto &&ii = uu.inputs.at(input_name);
-        auto &&mm = in_metas.at(1u);
-        configureInputInfo(ii, mm);
-        if (uu.params.layer_names_to_reshape.find(input_name) !=
-            uu.params.layer_names_to_reshape.end()) {
-            configureInputReshapeByImage(ii, mm, input_reshape_table);
-        }
-        ii->getPreProcess().setResizeAlgorithm(IE::RESIZE_BILINEAR);
+        // NB: Configuring input precision and network reshape must be done
+        // only in the loadNetwork case.
+        if (uu.params.kind == cv::gapi::ie::detail::ParamDesc::Kind::Load) {
+            // 0th is ROI, 1st is input image
+            const auto &input_name = uu.params.input_names.at(0);
+            auto &&ii = uu.inputs.at(input_name);
+            auto &&mm = in_metas.at(1u);
+            configureInputInfo(ii, mm);
+            if (uu.params.layer_names_to_reshape.find(input_name) !=
+                uu.params.layer_names_to_reshape.end()) {
+                configureInputReshapeByImage(ii, mm, input_reshape_table);
+            }
+            ii->getPreProcess().setResizeAlgorithm(IE::RESIZE_BILINEAR);
 
-        // FIXME: This isn't the best place to call reshape function.
-        // Сorrect solution would be to do this in compile() method of network,
-        // but now input meta isn't passed to compile() method.
-        if (!input_reshape_table.empty()) {
-            const_cast<IE::CNNNetwork *>(&uu.net)->reshape(input_reshape_table);
+            // FIXME: This isn't the best place to call reshape function.
+            // Сorrect solution would be to do this in compile() method of network,
+            // but now input meta isn't passed to compile() method.
+            if (!input_reshape_table.empty()) {
+                const_cast<IE::CNNNetwork *>(&uu.net)->reshape(input_reshape_table);
+            }
         }
 
         // FIXME: It would be nice here to have an exact number of network's
@@ -955,10 +1056,11 @@ struct InferROI: public cv::detail::KernelTag {
                         auto&& this_roi = ctx->inArg<cv::detail::OpaqueRef>(0).rref<cv::Rect>();
 
                         IE::Blob::Ptr this_blob = extractBlob(*ctx, 1);
-
-                        req.SetBlob(*(ctx->uu.params.input_names.begin()),
-                                IE::make_shared_blob(this_blob, toIE(this_roi)));
-
+                        setBlob(req,
+                                ctx->uu.params.kind,
+                                *(ctx->uu.params.input_names.begin()),
+                                IE::make_shared_blob(this_blob,
+                                                     toIE(this_roi)));
                         // FIXME: Should it be done by kernel ?
                         // What about to do that in RequestPool ?
                         req.StartAsync();
@@ -993,23 +1095,27 @@ struct InferList: public cv::detail::KernelTag {
         GAPI_Assert(uu.params.input_names.size() == (in_metas.size() - 1u)
                     && "Known input layers count doesn't match input meta count");
 
-        std::size_t idx = 1u;
-        for (auto &&input_name : uu.params.input_names) {
-            auto       &&ii = uu.inputs.at(input_name);
-            const auto & mm = in_metas[idx++];
-            configureInputInfo(ii, mm);
-            if (uu.params.layer_names_to_reshape.find(input_name) !=
-                uu.params.layer_names_to_reshape.end()) {
-                configureInputReshapeByImage(ii, mm, input_reshape_table);
+        // NB: Configuring input precision and network reshape must be done
+        // only in the loadNetwork case.
+        if (uu.params.kind == cv::gapi::ie::detail::ParamDesc::Kind::Load) {
+            std::size_t idx = 1u;
+            for (auto &&input_name : uu.params.input_names) {
+                auto       &&ii = uu.inputs.at(input_name);
+                const auto & mm = in_metas[idx++];
+                configureInputInfo(ii, mm);
+                if (uu.params.layer_names_to_reshape.find(input_name) !=
+                    uu.params.layer_names_to_reshape.end()) {
+                    configureInputReshapeByImage(ii, mm, input_reshape_table);
+                }
+                ii->getPreProcess().setResizeAlgorithm(IE::RESIZE_BILINEAR);
             }
-            ii->getPreProcess().setResizeAlgorithm(IE::RESIZE_BILINEAR);
-        }
 
-        // FIXME: This isn't the best place to call reshape function.
-        // Сorrect solution would be to do this in compile() method of network,
-        // but now input meta isn't passed to compile() method.
-        if (!input_reshape_table.empty()) {
-            const_cast<IE::CNNNetwork *>(&uu.net)->reshape(input_reshape_table);
+            // FIXME: This isn't the best place to call reshape function.
+            // Сorrect solution would be to do this in compile() method of network,
+            // but now input meta isn't passed to compile() method.
+            if (!input_reshape_table.empty()) {
+                const_cast<IE::CNNNetwork *>(&uu.net)->reshape(input_reshape_table);
+            }
         }
 
         // roi-list version is much easier at the moment.
@@ -1035,6 +1141,7 @@ struct InferList: public cv::detail::KernelTag {
         }
 
         IE::Blob::Ptr this_blob = extractBlob(*ctx, 1);
+
         std::vector<std::vector<int>> cached_dims(ctx->uu.params.num_out);
         for (auto i : ade::util::iota(ctx->uu.params.num_out)) {
             const IE::DataPtr& ie_out = ctx->uu.outputs.at(ctx->uu.params.output_names[i]);
@@ -1054,7 +1161,10 @@ struct InferList: public cv::detail::KernelTag {
                 cv::gimpl::ie::RequestPool::Task {
                     [ctx, rc, this_blob](InferenceEngine::InferRequest &req) {
                         IE::Blob::Ptr roi_blob = IE::make_shared_blob(this_blob, toIE(rc));
-                        req.SetBlob(ctx->uu.params.input_names[0u], roi_blob);
+                        setBlob(req,
+                                ctx->uu.params.kind,
+                                ctx->uu.params.input_names[0u],
+                                roi_blob);
                         req.StartAsync();
                     },
                     std::bind(callback, std::placeholders::_1, pos)
@@ -1128,19 +1238,23 @@ struct InferList2: public cv::detail::KernelTag {
                         && "Non-array inputs are not supported");
 
             if (op.k.inKinds[idx] == cv::detail::OpaqueKind::CV_RECT) {
-                // This is a cv::Rect -- configure the IE preprocessing
-                configureInputInfo(ii, mm_0);
-                if (uu.params.layer_names_to_reshape.find(input_name) !=
-                    uu.params.layer_names_to_reshape.end()) {
-                    configureInputReshapeByImage(ii, mm_0, input_reshape_table);
-                }
-                ii->getPreProcess().setResizeAlgorithm(IE::RESIZE_BILINEAR);
+                // NB: Configuring input precision and network reshape must be done
+                // only in the loadNetwork case.
+                if (uu.params.kind == cv::gapi::ie::detail::ParamDesc::Kind::Load) {
+                    // This is a cv::Rect -- configure the IE preprocessing
+                    configureInputInfo(ii, mm_0);
+                    if (uu.params.layer_names_to_reshape.find(input_name) !=
+                        uu.params.layer_names_to_reshape.end()) {
+                        configureInputReshapeByImage(ii, mm_0, input_reshape_table);
+                    }
+                    ii->getPreProcess().setResizeAlgorithm(IE::RESIZE_BILINEAR);
 
-                // FIXME: This isn't the best place to call reshape function.
-                // Сorrect solution would be to do this in compile() method of network,
-                // but now input meta isn't passed to compile() method.
-                if (!input_reshape_table.empty()) {
-                    const_cast<IE::CNNNetwork *>(&uu.net)->reshape(input_reshape_table);
+                    // FIXME: This isn't the best place to call reshape function.
+                    // Сorrect solution would be to do this in compile() method of network,
+                    // but now input meta isn't passed to compile() method.
+                    if (!input_reshape_table.empty()) {
+                        const_cast<IE::CNNNetwork *>(&uu.net)->reshape(input_reshape_table);
+                    }
                 }
             } else {
                 // This is a cv::GMat (equals to: cv::Mat)
@@ -1205,8 +1319,10 @@ struct InferList2: public cv::detail::KernelTag {
                                 GAPI_Assert(false &&
                                         "Only Rect and Mat types are supported for infer list 2!");
                             }
-
-                            req.SetBlob(ctx->uu.params.input_names[in_idx], this_blob);
+                            setBlob(req,
+                                    ctx->uu.params.kind,
+                                    ctx->uu.params.input_names[in_idx],
+                                    this_blob);
                         }
                         req.StartAsync();
                     },
@@ -1267,6 +1383,17 @@ namespace {
                                     , cv::gimpl::ie::InferList2
                                     >();
         }
+
+        virtual bool controlsMerge() const override {
+            return true;
+        }
+
+        virtual bool allowsMerge(const cv::gimpl::GIslandModel::Graph &,
+                                 const ade::NodeHandle &,
+                                 const ade::NodeHandle &,
+                                 const ade::NodeHandle &) const override {
+            return false;
+        }
     };
 }
 
@@ -1286,11 +1413,11 @@ std::vector<int> cv::gapi::ie::util::to_ocv(const IE::SizeVector &dims) {
     return toCV(dims);
 }
 
-IE::Blob::Ptr cv::gapi::ie::util::to_ie(cv::Mat &blob) {
+IE::Blob::Ptr cv::gapi::ie::util::to_ie(const cv::Mat &blob) {
     return wrapIE(blob, cv::gapi::ie::TraitAs::IMAGE);
 }
 
-IE::Blob::Ptr cv::gapi::ie::util::to_ie(cv::Mat &y_plane, cv::Mat &uv_plane) {
+IE::Blob::Ptr cv::gapi::ie::util::to_ie(const cv::Mat &y_plane, const cv::Mat &uv_plane) {
     auto y_blob   = wrapIE(y_plane,  cv::gapi::ie::TraitAs::IMAGE);
     auto uv_blob  = wrapIE(uv_plane, cv::gapi::ie::TraitAs::IMAGE);
 #if INF_ENGINE_RELEASE >= 2021010000
