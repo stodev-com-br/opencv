@@ -32,6 +32,7 @@
 #endif
 #include <new>
 #include <map>
+#include <queue>
 #include <vector>
 #include <string>
 #include <algorithm>
@@ -395,8 +396,10 @@ private:
 class SourceReaderCB : public IMFSourceReaderCallback
 {
 public:
+    static const size_t MSMF_READER_MAX_QUEUE_SIZE = 3;
+
     SourceReaderCB() :
-        m_nRefCount(0), m_hEvent(CreateEvent(NULL, FALSE, FALSE, NULL)), m_bEOS(FALSE), m_hrStatus(S_OK), m_reader(NULL), m_dwStreamIndex(0), m_lastSampleTimestamp(0)
+        m_nRefCount(0), m_hEvent(CreateEvent(NULL, FALSE, FALSE, NULL)), m_bEOS(FALSE), m_hrStatus(S_OK), m_reader(NULL), m_dwStreamIndex(0)
     {
     }
 
@@ -441,12 +444,19 @@ public:
             if (pSample)
             {
                 CV_LOG_DEBUG(NULL, "videoio(MSMF): got frame at " << llTimestamp);
-                if (m_lastSample.Get())
+                if (m_capturedFrames.size() >= MSMF_READER_MAX_QUEUE_SIZE)
                 {
-                    CV_LOG_DEBUG(NULL, "videoio(MSMF): drop frame (not processed)");
+#if 0
+                    CV_LOG_DEBUG(NULL, "videoio(MSMF): drop frame (not processed). Timestamp=" << m_capturedFrames.front().timestamp);
+                    m_capturedFrames.pop();
+#else
+                    // this branch reduces latency if we drop frames due to slow processing.
+                    // avoid fetching of already outdated frames from the queue's front.
+                    CV_LOG_DEBUG(NULL, "videoio(MSMF): drop previous frames (not processed): " << m_capturedFrames.size());
+                    std::queue<CapturedFrameInfo>().swap(m_capturedFrames);  // similar to missing m_capturedFrames.clean();
+#endif
                 }
-                m_lastSampleTimestamp = llTimestamp;
-                m_lastSample = pSample;
+                m_capturedFrames.emplace(CapturedFrameInfo{ llTimestamp, _ComPtr<IMFSample>(pSample), hrStatus });
             }
         }
         else
@@ -483,37 +493,50 @@ public:
         return S_OK;
     }
 
-    HRESULT Wait(DWORD dwMilliseconds, _ComPtr<IMFSample>& mediaSample, BOOL& pbEOS)
+    HRESULT Wait(DWORD dwMilliseconds, _ComPtr<IMFSample>& mediaSample, LONGLONG& sampleTimestamp, BOOL& pbEOS)
     {
         pbEOS = FALSE;
 
-        DWORD dwResult = WaitForSingleObject(m_hEvent, dwMilliseconds);
-        if (dwResult == WAIT_TIMEOUT)
+        for (;;)
         {
-            return E_PENDING;
-        }
-        else if (dwResult != WAIT_OBJECT_0)
-        {
-            return HRESULT_FROM_WIN32(GetLastError());
-        }
+            {
+                cv::AutoLock lock(m_mutex);
 
-        pbEOS = m_bEOS;
-        if (!pbEOS)
-        {
-            cv::AutoLock lock(m_mutex);
-            mediaSample = m_lastSample;
-            CV_Assert(mediaSample);
-            m_lastSample.Release();
-            ResetEvent(m_hEvent);  // event is auto-reset, but we need this forced reset due time gap between wait() and mutex hold.
+                pbEOS = m_bEOS && m_capturedFrames.empty();
+                if (pbEOS)
+                    return m_hrStatus;
+
+                if (!m_capturedFrames.empty())
+                {
+                    CV_Assert(!m_capturedFrames.empty());
+                    CapturedFrameInfo frameInfo = m_capturedFrames.front(); m_capturedFrames.pop();
+                    CV_LOG_DEBUG(NULL, "videoio(MSMF): handle frame at " << frameInfo.timestamp);
+                    mediaSample = frameInfo.sample;
+                    CV_Assert(mediaSample);
+                    sampleTimestamp = frameInfo.timestamp;
+                    ResetEvent(m_hEvent);  // event is auto-reset, but we need this forced reset due time gap between wait() and mutex hold.
+                    return frameInfo.hrStatus;
+                }
+            }
+
+            CV_LOG_DEBUG(NULL, "videoio(MSMF): waiting for frame... ");
+            DWORD dwResult = WaitForSingleObject(m_hEvent, dwMilliseconds);
+            if (dwResult == WAIT_TIMEOUT)
+            {
+                return E_PENDING;
+            }
+            else if (dwResult != WAIT_OBJECT_0)
+            {
+                return HRESULT_FROM_WIN32(GetLastError());
+            }
         }
-        return m_hrStatus;
     }
 
 private:
     // Destructor is private. Caller should call Release.
     virtual ~SourceReaderCB()
     {
-        CV_LOG_WARNING(NULL, "terminating async callback");
+        CV_LOG_INFO(NULL, "terminating async callback");
     }
 
 public:
@@ -525,8 +548,14 @@ public:
 
     IMFSourceReader *m_reader;
     DWORD m_dwStreamIndex;
-    LONGLONG m_lastSampleTimestamp;
-    _ComPtr<IMFSample>  m_lastSample;
+
+    struct CapturedFrameInfo {
+        LONGLONG timestamp;
+        _ComPtr<IMFSample> sample;
+        HRESULT hrStatus;
+    };
+
+    std::queue<CapturedFrameInfo> m_capturedFrames;
 };
 
 //==================================================================================================
@@ -709,6 +738,7 @@ public:
     virtual void close();
     virtual double getProperty(int) const CV_OVERRIDE;
     virtual bool setProperty(int, double) CV_OVERRIDE;
+    bool configureAudioFrame();
     bool grabAudioFrame();
     bool grabVideoFrame();
     virtual bool grabFrame() CV_OVERRIDE;
@@ -726,6 +756,7 @@ protected:
     bool configureHW(bool enable);
     bool configureStreams(const cv::VideoCaptureParameters&);
     bool setAudioProperties(const cv::VideoCaptureParameters&);
+    bool checkAudioProperties();
 
     template <typename CtrlT>
     bool readComplexPropery(long prop, long& val) const;
@@ -765,6 +796,7 @@ protected:
     unsigned int audioBaseIndex;
     int outputVideoFormat;
     int outputAudioFormat;
+    UINT32 audioSamplesPerSecond;
     bool convertFormat;
     MFTIME duration;
     LONGLONG frameStep;
@@ -817,6 +849,7 @@ CvCapture_MSMF::CvCapture_MSMF():
     audioBaseIndex(1),
     outputVideoFormat(CV_CAP_MODE_BGR),
     outputAudioFormat(CV_16S),
+    audioSamplesPerSecond(0),
     convertFormat(true),
     duration(0),
     frameStep(0),
@@ -1038,6 +1071,7 @@ bool CvCapture_MSMF::configureAudioOutput(MediaType newType)
     if (bestMatch.second.isEmpty(true))
     {
         CV_LOG_DEBUG(NULL, "Can not find audio stream with requested parameters");
+        isOpen = false;
         return false;
     }
     dwAudioStreamIndex = bestMatch.first.stream;
@@ -1045,7 +1079,7 @@ bool CvCapture_MSMF::configureAudioOutput(MediaType newType)
     MediaType newFormat = bestMatch.second;
 
     newFormat.majorType = MFMediaType_Audio;
-    newFormat.nSamplesPerSec = 44100;
+    newFormat.nSamplesPerSec = (audioSamplesPerSecond == 0) ? 44100 : audioSamplesPerSecond;
     switch (outputAudioFormat)
     {
     case CV_8S:
@@ -1145,7 +1179,8 @@ bool CvCapture_MSMF::open(int index, const cv::VideoCaptureParameters* params)
     if (params)
     {
         configureHW(*params);
-        configureStreams(*params);
+        if (!(configureStreams(*params) && setAudioProperties(*params)))
+            return false;
     }
     if (videoStream != -1 && audioStream != -1 || videoStream == -1 && audioStream == -1)
     {
@@ -1187,6 +1222,12 @@ bool CvCapture_MSMF::open(int index, const cv::VideoCaptureParameters* params)
         close();
         return false;
     }
+    if (isOpen)
+    {
+        if (audioStream != -1)
+            if (!checkAudioProperties())
+                return false;
+    }
 
     return isOpen;
 }
@@ -1200,8 +1241,8 @@ bool CvCapture_MSMF::open(const cv::String& _filename, const cv::VideoCapturePar
     if (params)
     {
         configureHW(*params);
-        configureStreams(*params);
-        setAudioProperties(*params);
+        if (!(configureStreams(*params) && setAudioProperties(*params)))
+            return false;
     }
     // Set source reader parameters
     _ComPtr<IMFAttributes> attr = getDefaultSourceConfig();
@@ -1233,12 +1274,19 @@ bool CvCapture_MSMF::open(const cv::String& _filename, const cv::VideoCapturePar
         return false;
     }
     if (isOpen)
-        if (audioStream != -1 && videoStream != -1)
+    {
+        if (audioStream != -1)
         {
-            isOpen = grabFrame();
-            if (isOpen)
-                grabIsDone = true;
+            if (!checkAudioProperties())
+                return false;
+            if (videoStream != -1)
+            {
+                isOpen = grabFrame();
+                if (isOpen)
+                    grabIsDone = true;
+            }
         }
+    }
     return isOpen;
 }
 
@@ -1316,14 +1364,49 @@ bool CvCapture_MSMF::setAudioProperties(const cv::VideoCaptureParameters& params
             outputAudioFormat = value;
         }
     }
+    if (params.has(CAP_PROP_AUDIO_SAMPLES_PER_SECOND))
+    {
+        int value = static_cast<int>(params.get<double>(CAP_PROP_AUDIO_SAMPLES_PER_SECOND));
+        if (value < 0)
+        {
+            CV_LOG_ERROR(NULL, "VIDEOIO/MSMF: CAP_PROP_AUDIO_SAMPLES_PER_SECOND parameter can't be negative: " << value);
+            return false;
+        }
+        else
+        {
+            audioSamplesPerSecond = value;
+        }
+    }
     if (params.has(CAP_PROP_AUDIO_SYNCHRONIZE))
     {
-        int value = static_cast<int>(params.get<double>(CAP_PROP_AUDIO_SYNCHRONIZE));
+        int value = static_cast<UINT32>(params.get<double>(CAP_PROP_AUDIO_SYNCHRONIZE));
         syncLastFrame = (value != 0) ? true : false;
     }
     return true;
 }
-
+bool CvCapture_MSMF::checkAudioProperties()
+{
+    if (audioSamplesPerSecond != 0)
+    {
+        _ComPtr<IMFMediaType> type;
+        UINT32 actualAudioSamplesPerSecond = 0;
+        HRESULT hr = videoFileSource->GetCurrentMediaType(dwAudioStreamIndex, &type);
+        if (SUCCEEDED(hr))
+        {
+            type->GetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND , &actualAudioSamplesPerSecond);
+            if (actualAudioSamplesPerSecond != audioSamplesPerSecond)
+            {
+                CV_LOG_ERROR(NULL, "VIDEOIO/MSMF: CAP_PROP_AUDIO_SAMPLES_PER_SECOND parameter value is invalid/unsupported: " << audioSamplesPerSecond
+                            << ". Current value of CAP_PROP_AUDIO_SAMPLES_PER_SECOND: " << actualAudioSamplesPerSecond);
+                close();
+                return false;
+            }
+            return true;
+        }
+        return false;
+    }
+    return true;
+}
 bool CvCapture_MSMF::grabVideoFrame()
 {
     DWORD streamIndex,  flags;
@@ -1439,6 +1522,90 @@ bool CvCapture_MSMF::grabVideoFrame()
     return returnFlag;
 }
 
+bool CvCapture_MSMF::configureAudioFrame()
+{
+    if (!audioSamples.empty() || !bufferAudioData.empty() && aEOS)
+    {
+        _ComPtr<IMFMediaBuffer> buf = NULL;
+        std::vector<BYTE> audioDataInUse;
+        BYTE* ptr = NULL;
+        DWORD maxsize = 0, cursize = 0;
+        CV_TRACE_REGION("get_contiguous_buffer");
+        for (auto item : audioSamples)
+        {
+            if (!SUCCEEDED(item->ConvertToContiguousBuffer(&buf)))
+            {
+                CV_TRACE_REGION("get_buffer");
+                DWORD bcnt = 0;
+                if (!SUCCEEDED(item->GetBufferCount(&bcnt)))
+                    break;
+                if (bcnt == 0)
+                    break;
+                if (!SUCCEEDED(item->GetBufferByIndex(0, &buf)))
+                    break;
+            }
+            if (!SUCCEEDED(buf->Lock(&ptr, &maxsize, &cursize)))
+                break;
+            size_t lastSize = bufferAudioData.size();
+            bufferAudioData.resize(lastSize+cursize);
+            for (unsigned int i = 0; i < cursize; i++)
+            {
+                bufferAudioData[lastSize+i]=*(ptr+i);
+            }
+            CV_TRACE_REGION_NEXT("unlock");
+            buf->Unlock();
+            buf = NULL;
+        }
+        audioSamples.clear();
+
+        audioSamplePos += chunkLengthOfBytes/((captureAudioFormat.bit_per_sample/8)*captureAudioFormat.nChannels);
+        chunkLengthOfBytes = (videoStream != -1) ? (LONGLONG)((requiredAudioTime*captureAudioFormat.nSamplesPerSec*captureAudioFormat.nChannels*(captureAudioFormat.bit_per_sample)/8)/1e7) : cursize;
+        if ((videoStream != -1) && (chunkLengthOfBytes % ((int)(captureAudioFormat.bit_per_sample)/8* (int)captureAudioFormat.nChannels) != 0))
+        {
+            if ( (double)audioSamplePos/captureAudioFormat.nSamplesPerSec + audioStartOffset * 1e-7 - usedVideoSampleTime * 1e-7 >= 0 )
+                chunkLengthOfBytes -= numberOfAdditionalAudioBytes;
+            numberOfAdditionalAudioBytes = ((int)(captureAudioFormat.bit_per_sample)/8* (int)captureAudioFormat.nChannels)
+                                        - chunkLengthOfBytes % ((int)(captureAudioFormat.bit_per_sample)/8* (int)captureAudioFormat.nChannels);
+            chunkLengthOfBytes += numberOfAdditionalAudioBytes;
+        }
+        if (lastFrame && !syncLastFrame || aEOS && !vEOS)
+        {
+            chunkLengthOfBytes = bufferAudioData.size();
+            audioSamplePos += chunkLengthOfBytes/((captureAudioFormat.bit_per_sample/8)*captureAudioFormat.nChannels);
+        }
+        CV_Check((double)chunkLengthOfBytes, chunkLengthOfBytes >= INT_MIN || chunkLengthOfBytes <= INT_MAX, "MSMF: The chunkLengthOfBytes is out of the allowed range");
+        copy(bufferAudioData.begin(), bufferAudioData.begin() + (int)chunkLengthOfBytes, std::back_inserter(audioDataInUse));
+        bufferAudioData.erase(bufferAudioData.begin(), bufferAudioData.begin() + (int)chunkLengthOfBytes);
+        if (audioFrame.empty())
+        {
+            switch (outputAudioFormat)
+            {
+            case CV_8S:
+                cv::Mat((int)chunkLengthOfBytes/(captureAudioFormat.nChannels), captureAudioFormat.nChannels, CV_8S, audioDataInUse.data()).copyTo(audioFrame);
+                break;
+            case CV_16S:
+                cv::Mat((int)chunkLengthOfBytes/(2*captureAudioFormat.nChannels), captureAudioFormat.nChannels, CV_16S, audioDataInUse.data()).copyTo(audioFrame);
+                break;
+            case CV_32S:
+                cv::Mat((int)chunkLengthOfBytes/(4*captureAudioFormat.nChannels), captureAudioFormat.nChannels, CV_32S, audioDataInUse.data()).copyTo(audioFrame);
+                break;
+            case CV_32F:
+                cv::Mat((int)chunkLengthOfBytes/(4*captureAudioFormat.nChannels), captureAudioFormat.nChannels, CV_32F, audioDataInUse.data()).copyTo(audioFrame);
+                break;
+            default:
+                break;
+            }
+        }
+        audioDataInUse.clear();
+        audioDataInUse.shrink_to_fit();
+        return true;
+    }
+    else
+    {
+        return false;
+    }
+}
+
 bool CvCapture_MSMF::grabAudioFrame()
 {
     DWORD streamIndex,  flags;
@@ -1500,6 +1667,8 @@ bool CvCapture_MSMF::grabAudioFrame()
                 aEOS = true;
                 if (videoStream != -1 && !vEOS)
                     returnFlag = true;
+                if (videoStream == -1)
+                    audioSamplePos += chunkLengthOfBytes/((captureAudioFormat.bit_per_sample/8)*captureAudioFormat.nChannels);
                 CV_LOG_DEBUG(NULL, "videoio(MSMF): End of audio stream detected");
                 break;
             }
@@ -1538,81 +1707,7 @@ bool CvCapture_MSMF::grabAudioFrame()
         }
     }
 
-    if (!audioSamples.empty() || !bufferAudioData.empty() && aEOS)
-    {
-        _ComPtr<IMFMediaBuffer> buf = NULL;
-        std::vector<BYTE> audioDataInUse;
-        BYTE* ptr = NULL;
-        DWORD maxsize = 0, cursize = 0;
-        CV_TRACE_REGION("get_contiguous_buffer");
-        for (auto item : audioSamples)
-        {
-            if (!SUCCEEDED(item->ConvertToContiguousBuffer(&buf)))
-            {
-                CV_TRACE_REGION("get_buffer");
-                DWORD bcnt = 0;
-                if (!SUCCEEDED(item->GetBufferCount(&bcnt)))
-                    break;
-                if (bcnt == 0)
-                    break;
-                if (!SUCCEEDED(item->GetBufferByIndex(0, &buf)))
-                    break;
-            }
-            if (!SUCCEEDED(buf->Lock(&ptr, &maxsize, &cursize)))
-                break;
-            size_t lastSize = bufferAudioData.size();
-            bufferAudioData.resize(lastSize+cursize);
-            for (unsigned int i = 0; i < cursize; i++)
-            {
-                bufferAudioData[lastSize+i]=*(ptr+i);
-            }
-            CV_TRACE_REGION_NEXT("unlock");
-            buf->Unlock();
-            buf = NULL;
-        }
-        audioSamples.clear();
-
-        audioSamplePos += chunkLengthOfBytes/((captureAudioFormat.bit_per_sample/8)*captureAudioFormat.nChannels);
-        chunkLengthOfBytes = (videoStream != -1) ? (LONGLONG)((requiredAudioTime*captureAudioFormat.nSamplesPerSec*captureAudioFormat.nChannels*(captureAudioFormat.bit_per_sample)/8)/1e7) : cursize;
-        if ((videoStream != -1) && (chunkLengthOfBytes % ((int)(captureAudioFormat.bit_per_sample)/8* (int)captureAudioFormat.nChannels) != 0))
-        {
-            if ( (double)audioSamplePos/captureAudioFormat.nSamplesPerSec + audioStartOffset * 1e-7 - usedVideoSampleTime * 1e-7 >= 0 )
-                chunkLengthOfBytes -= numberOfAdditionalAudioBytes;
-            numberOfAdditionalAudioBytes = ((int)(captureAudioFormat.bit_per_sample)/8* (int)captureAudioFormat.nChannels)
-                                        - chunkLengthOfBytes % ((int)(captureAudioFormat.bit_per_sample)/8* (int)captureAudioFormat.nChannels);
-            chunkLengthOfBytes += numberOfAdditionalAudioBytes;
-        }
-        if (lastFrame && !syncLastFrame|| aEOS && !vEOS)
-        {
-            chunkLengthOfBytes = bufferAudioData.size();
-        }
-        CV_Check((double)chunkLengthOfBytes, chunkLengthOfBytes >= INT_MIN || chunkLengthOfBytes <= INT_MAX, "MSMF: The chunkLengthOfBytes is out of the allowed range");
-        copy(bufferAudioData.begin(), bufferAudioData.begin() + (int)chunkLengthOfBytes, std::back_inserter(audioDataInUse));
-        bufferAudioData.erase(bufferAudioData.begin(), bufferAudioData.begin() + (int)chunkLengthOfBytes);
-        if (audioFrame.empty())
-        {
-            switch (outputAudioFormat)
-            {
-            case CV_8S:
-                cv::Mat((int)chunkLengthOfBytes/(captureAudioFormat.nChannels), captureAudioFormat.nChannels, CV_8S, audioDataInUse.data()).copyTo(audioFrame);
-                break;
-            case CV_16S:
-                cv::Mat((int)chunkLengthOfBytes/(2*captureAudioFormat.nChannels), captureAudioFormat.nChannels, CV_16S, audioDataInUse.data()).copyTo(audioFrame);
-                break;
-            case CV_32S:
-                cv::Mat((int)chunkLengthOfBytes/(4*captureAudioFormat.nChannels), captureAudioFormat.nChannels, CV_32S, audioDataInUse.data()).copyTo(audioFrame);
-                break;
-            case CV_32F:
-                cv::Mat((int)chunkLengthOfBytes/(4*captureAudioFormat.nChannels), captureAudioFormat.nChannels, CV_32F, audioDataInUse.data()).copyTo(audioFrame);
-                break;
-            default:
-                break;
-            }
-        }
-        audioDataInUse.clear();
-        audioDataInUse.shrink_to_fit();
-    }
-
+    returnFlag &= configureAudioFrame();
     return returnFlag;
 }
 
@@ -1623,6 +1718,7 @@ bool CvCapture_MSMF::grabFrame()
     if (grabIsDone)
     {
         grabIsDone = false;
+        CV_LOG_DEBUG(NULL, "videoio(MSMF): return pre-grabbed frame " << usedVideoSampleTime);
         return true;
     }
 
@@ -1650,7 +1746,8 @@ bool CvCapture_MSMF::grabFrame()
             }
         }
         BOOL bEOS = false;
-        if (FAILED(hr = reader->Wait( videoStream == -1 ? INFINITE : 10000, (videoStream != -1) ? usedVideoSample : audioSamples[0], bEOS)))  // 10 sec
+        LONGLONG timestamp = 0;
+        if (FAILED(hr = reader->Wait( videoStream == -1 ? INFINITE : 10000, (videoStream != -1) ? usedVideoSample : audioSamples[0], timestamp, bEOS)))  // 10 sec
         {
             CV_LOG_WARNING(NULL, "videoio(MSMF): can't grab frame. Error: " << hr);
             return false;
@@ -1661,7 +1758,11 @@ bool CvCapture_MSMF::grabFrame()
             return false;
         }
         if (videoStream != -1)
-            usedVideoSampleTime = reader->m_lastSampleTimestamp;
+            usedVideoSampleTime = timestamp;
+        if (audioStream != -1)
+            return configureAudioFrame();
+
+        CV_LOG_DEBUG(NULL, "videoio(MSMF): grabbed frame " << usedVideoSampleTime);
         return true;
     }
     else if (isOpen)
@@ -1695,6 +1796,7 @@ bool CvCapture_MSMF::grabFrame()
 bool CvCapture_MSMF::retrieveVideoFrame(cv::OutputArray frame)
 {
     CV_TRACE_FUNCTION();
+    CV_LOG_DEBUG(NULL, "videoio(MSMF): retrieve video frame start...");
     do
     {
         if (!usedVideoSample)
@@ -1785,6 +1887,7 @@ bool CvCapture_MSMF::retrieveVideoFrame(cv::OutputArray frame)
             buffer2d->Unlock2D();
         else
             buf->Unlock();
+        CV_LOG_DEBUG(NULL, "videoio(MSMF): retrieve video frame done!");
         return !frame.empty();
     } while (0);
 

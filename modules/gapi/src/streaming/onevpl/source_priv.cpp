@@ -8,10 +8,12 @@
 #include <sstream>
 
 #include "streaming/onevpl/engine/decode/decode_engine_legacy.hpp"
+#include "streaming/onevpl/engine/transcode/transcode_engine_legacy.hpp"
 #include "streaming/onevpl/accelerators/accel_policy_dx11.hpp"
 #include "streaming/onevpl/accelerators/accel_policy_cpu.hpp"
 #include "streaming/onevpl/utils.hpp"
 #include "streaming/onevpl/cfg_params_parser.hpp"
+#include "streaming/onevpl/data_provider_defines.hpp"
 
 #include "streaming/onevpl/source_priv.hpp"
 #include "logger.hpp"
@@ -34,6 +36,10 @@ GMetaArg GSource::Priv::descr_of() const {
 
 #else // HAVE_ONEVPL
 
+// TODO global variable move it into Source after CloneSession issue resolving
+mfxLoader mfx_handle = MFXLoad();
+int impl_number = 0;
+
 namespace cv {
 namespace gapi {
 namespace wip {
@@ -44,23 +50,23 @@ enum {
     VPL_NEW_API_MINOR_VERSION = 2
 };
 
-
 GSource::Priv::Priv() :
-    mfx_handle(MFXLoad()),
+//    mfx_handle(MFXLoad()),
     mfx_impl_description(),
     mfx_handle_configs(),
     cfg_params(),
     mfx_session(),
     description(),
     description_is_valid(false),
-    engine()
+    engine(),
+    consumed_frames_count()
 {
     GAPI_LOG_INFO(nullptr, "Initialized MFX handle: " << mfx_handle);
 }
 
 GSource::Priv::Priv(std::shared_ptr<IDataProvider> provider,
                     const std::vector<CfgParam>& params,
-                    std::shared_ptr<IDeviceSelector>) :
+                    std::shared_ptr<IDeviceSelector> device_selector) :
      GSource::Priv()
 {
     // Enable Config
@@ -102,6 +108,20 @@ GSource::Priv::Priv(std::shared_ptr<IDataProvider> provider,
             GAPI_LOG_WARNING(nullptr, "MFXSetConfigFilterProperty failed, error: " <<
                                       mfxstatus_to_string(sts) <<
                                       " - for \"" << cfg_param_it->get_name() << "\"");
+            GAPI_Assert(false && "MFXSetConfigFilterProperty failed");
+        }
+
+        mfx_param.Type     = MFX_VARIANT_TYPE_U32;
+        mfx_param.Data.U32 = MFX_EXTBUFF_VPP_SCALING;
+        sts = MFXSetConfigFilterProperty(cfg_inst,
+        (mfxU8 *)"mfxImplDescription.mfxVPPDescription.filter.FilterFourCC",
+        mfx_param);
+
+        if (sts != MFX_ERR_NONE )
+        {
+            GAPI_LOG_WARNING(nullptr, "MFXSetConfigFilterProperty failed, error: " <<
+                                      mfxstatus_to_string(sts) <<
+                                      " - for \"mfxImplDescription.mfxVPPDescription.filter.FilterFourCC\"");
             GAPI_Assert(false && "MFXSetConfigFilterProperty failed");
         }
 
@@ -147,7 +167,7 @@ GSource::Priv::Priv(std::shared_ptr<IDataProvider> provider,
         // An available VPL implementation with max matching count
         std::vector<CfgParam> impl_params = get_params_from_string<CfgParam>(ss.str());
         std::sort(impl_params.begin(), impl_params.end());
-        GAPI_LOG_DEBUG(nullptr, "Find implementation cfg params count" << impl_params.size());
+        GAPI_LOG_DEBUG(nullptr, "Find implementation cfg params count: " << impl_params.size());
 
         std::vector<CfgParam> matched_params;
         std::set_intersection(impl_params.begin(), impl_params.end(),
@@ -171,7 +191,8 @@ GSource::Priv::Priv(std::shared_ptr<IDataProvider> provider,
     GAPI_Assert(max_match_it != matches_count.rend() &&
                 "Cannot find matched MFX implementation for requested configuration");
 
-    int impl_number = max_match_it->second;
+    // TODO impl_number is global for now
+    impl_number = max_match_it->second;
     GAPI_LOG_INFO(nullptr, "Chosen implementation index: " << impl_number);
 
     // release unusable impl available_impl_descriptions
@@ -193,16 +214,9 @@ GSource::Priv::Priv(std::shared_ptr<IDataProvider> provider,
 
     GAPI_LOG_INFO(nullptr, "Initialized MFX session: " << mfx_session);
 
-    // initialize decoder
-    // Find codec ID from config
-    auto dec_it = std::find_if(cfg_params.begin(), cfg_params.end(), [] (const CfgParam& value) {
-        return value.get_name() == "mfxImplDescription.mfxDecoderDescription.decoder.CodecID";
-    });
-    GAPI_Assert (dec_it != cfg_params.end() && "Cannot determine DecoderID from oneVPL config. Abort");
-
     // create session driving engine if required
     if (!engine) {
-        std::unique_ptr<VPLAccelerationPolicy> acceleration = initializeHWAccel();
+        std::unique_ptr<VPLAccelerationPolicy> acceleration = initializeHWAccel(device_selector);
 
         // TODO  Add factory static method in ProcessingEngineBase
         if (mfx_impl_description->ApiVersion.Major >= VPL_NEW_API_MAJOR_VERSION) {
@@ -210,109 +224,63 @@ GSource::Priv::Priv(std::shared_ptr<IDataProvider> provider,
                         "GSource mfx_impl_description->ApiVersion.Major >= VPL_NEW_API_MAJOR_VERSION"
                         " - is not implemented");
         } else {
-            engine.reset(new VPLLegacyDecodeEngine(std::move(acceleration)));
+            const auto& transcode_params = VPLLegacyTranscodeEngine::get_vpp_params(preferred_params);
+            if (!transcode_params.empty()) {
+                engine.reset(new VPLLegacyTranscodeEngine(std::move(acceleration)));
+            } else {
+                engine.reset(new VPLLegacyDecodeEngine(std::move(acceleration)));
+            }
         }
     }
 
-    //create decoder for session accoring to header recovered from source file
-    DecoderParams decoder_param = create_decoder_from_file(*dec_it, provider);
-
     // create engine session for processing mfx session pipeline
-    engine->initialize_session(mfx_session, std::move(decoder_param),
-                               provider);
+    auto engine_session_ptr = engine->initialize_session(mfx_session, cfg_params,
+                                                         provider);
+
+    const mfxFrameInfo& video_param = engine_session_ptr->get_video_param();
+
+    // set valid description
+    description.size = cv::Size {
+                            video_param.Width,
+                            video_param.Height};
+    switch(video_param.FourCC) {
+        case MFX_FOURCC_I420:
+            throw std::runtime_error("Cannot parse GMetaArg description: MediaFrame doesn't support I420 type");
+        case MFX_FOURCC_NV12:
+            description.fmt = cv::MediaFormat::NV12;
+            break;
+        default:
+            throw std::runtime_error("Cannot parse GMetaArg description: MediaFrame unknown 'fmt' type: " +
+                                     std::to_string(video_param.FourCC));
+    }
+    description_is_valid = true;
 
     //prepare session for processing
     engine->process(mfx_session);
 }
 
-GSource::Priv::~Priv()
-{
+GSource::Priv::~Priv() {
+    engine.reset();
+
+    GAPI_LOG_INFO(nullptr, "consumed frames count: " << consumed_frames_count);
     GAPI_LOG_INFO(nullptr, "Unload MFX implementation description: " << mfx_impl_description);
     MFXDispReleaseImplDescription(mfx_handle, mfx_impl_description);
     GAPI_LOG_INFO(nullptr, "Unload MFX handle: " << mfx_handle);
-    MFXUnload(mfx_handle);
+    //MFXUnload(mfx_handle);
 }
 
-DecoderParams GSource::Priv::create_decoder_from_file(const CfgParam& decoder_cfg,
-                                                      std::shared_ptr<IDataProvider> provider)
-{
-    GAPI_DbgAssert(provider && "Cannot create decoder, data provider is nullptr");
-
-    mfxBitstream bitstream{};
-    const int BITSTREAM_BUFFER_SIZE = 2000000;
-    bitstream.MaxLength = BITSTREAM_BUFFER_SIZE;
-    bitstream.Data = (mfxU8 *)calloc(bitstream.MaxLength, sizeof(mfxU8));
-    if(!bitstream.Data) {
-        throw std::runtime_error("Cannot allocate bitstream.Data bytes: " +
-                                 std::to_string(bitstream.MaxLength * sizeof(mfxU8)));
-    }
-
-    mfxVariant decoder = cfg_param_to_mfx_variant(decoder_cfg);
-    // according to oneVPL documentation references
-    // https://spec.oneapi.io/versions/latest/elements/oneVPL/source/API_ref/VPL_disp_api_struct.html
-    // mfxVariant is an `union` type and considered different meaning for different param ids
-    // So CodecId has U32 data type
-    bitstream.CodecId = decoder.Data.U32;
-
-    mfxStatus sts = ReadEncodedStream(bitstream, provider);
-    if(MFX_ERR_NONE != sts) {
-        throw std::runtime_error("Error reading bitstream, error: " +
-                                 mfxstatus_to_string(sts));
-    }
-
-    // Retrieve the frame information from input stream
-    mfxVideoParam mfxDecParams {};
-    mfxDecParams.mfx.CodecId = decoder.Data.U32;
-    mfxDecParams.IOPattern   = MFX_IOPATTERN_OUT_SYSTEM_MEMORY;//MFX_IOPATTERN_OUT_VIDEO_MEMORY;
-    sts = MFXVideoDECODE_DecodeHeader(mfx_session, &bitstream, &mfxDecParams);
-    if(MFX_ERR_NONE != sts) {
-        throw std::runtime_error("Error decoding header, error: " +
-                                 mfxstatus_to_string(sts));
-    }
-
-    // Input parameters finished, now initialize decode
-    sts = MFXVideoDECODE_Init(mfx_session, &mfxDecParams);
-    if (MFX_ERR_NONE != sts) {
-        throw std::runtime_error("Error initializing Decode, error: " +
-                                 mfxstatus_to_string(sts));
-    }
-
-    // set valid description
-    description.size = cv::Size {
-                            mfxDecParams.mfx.FrameInfo.Width,
-                            mfxDecParams.mfx.FrameInfo.Height};
-    switch(mfxDecParams.mfx.FrameInfo.FourCC) {
-        case MFX_FOURCC_I420:
-            GAPI_Assert(false && "Cannot create GMetaArg description: "
-                                 "MediaFrame doesn't support I420 type");
-        case MFX_FOURCC_NV12:
-            description.fmt = cv::MediaFormat::NV12;
-            break;
-        default:
-        {
-            GAPI_LOG_WARNING(nullptr, "Cannot create GMetaArg description: "
-                                      "MediaFrame unknown 'fmt' type: " <<
-                                      std::to_string(mfxDecParams.mfx.FrameInfo.FourCC));
-            GAPI_Assert(false && "Cannot create GMetaArg description: invalid value");
-        }
-    }
-    description_is_valid = true;
-
-    return {bitstream, mfxDecParams};
-}
-
-std::unique_ptr<VPLAccelerationPolicy> GSource::Priv::initializeHWAccel()
+std::unique_ptr<VPLAccelerationPolicy> GSource::Priv::initializeHWAccel(std::shared_ptr<IDeviceSelector> selector)
 {
     std::unique_ptr<VPLAccelerationPolicy> ret;
 
     auto accel_mode_it = std::find_if(cfg_params.begin(), cfg_params.end(), [] (const CfgParam& value) {
-        return value.get_name() == "mfxImplDescription.AccelerationMode";
+        return value.get_name() ==  CfgParam::acceleration_mode_name();
     });
     if (accel_mode_it == cfg_params.end())
     {
         GAPI_LOG_DEBUG(nullptr, "No HW Accel requested. Use CPU");
 
-        ret.reset(new VPLCPUAccelerationPolicy);
+        ret.reset(new VPLCPUAccelerationPolicy(selector));
         return ret;
     }
 
@@ -322,13 +290,13 @@ std::unique_ptr<VPLAccelerationPolicy> GSource::Priv::initializeHWAccel()
     switch(accel_mode.Data.U32) {
         case MFX_ACCEL_MODE_VIA_D3D11:
         {
-            std::unique_ptr<VPLDX11AccelerationPolicy> cand(new VPLDX11AccelerationPolicy);
+            std::unique_ptr<VPLDX11AccelerationPolicy> cand(new VPLDX11AccelerationPolicy(selector));
             ret = std::move(cand);
             break;
         }
         case MFX_ACCEL_MODE_NA:
         {
-            std::unique_ptr<VPLCPUAccelerationPolicy> cand(new VPLCPUAccelerationPolicy);
+            std::unique_ptr<VPLCPUAccelerationPolicy> cand(new VPLCPUAccelerationPolicy(selector));
             ret = std::move(cand);
             break;
         }
@@ -369,6 +337,7 @@ bool GSource::Priv::pull(cv::gapi::wip::Data& data)
 
     if (engine->get_ready_frames_count()) {
         engine->get_frame(data);
+        consumed_frames_count++;
         return true;
     } else {
         return false;

@@ -17,14 +17,7 @@
 #include <opencv2/gapi/streaming/onevpl/source.hpp>
 
 #ifdef HAVE_ONEVPL
-#if (MFX_VERSION >= 2000)
-#include <vpl/mfxdispatcher.h>
-#endif // MFX_VERSION
-
-#include <vpl/mfx.h>
-
-#include <vpl/mfxvideo.h>
-
+#include "streaming/onevpl/onevpl_export.hpp"
 #include "streaming/onevpl/engine/processing_engine_base.hpp"
 
 namespace cv {
@@ -49,11 +42,10 @@ struct GSource::Priv
     GMetaArg descr_of() const;
 private:
     Priv();
-    DecoderParams create_decoder_from_file(const CfgParam& decoder,
-                                           std::shared_ptr<IDataProvider> provider);
-    std::unique_ptr<VPLAccelerationPolicy> initializeHWAccel();
+    std::unique_ptr<VPLAccelerationPolicy> initializeHWAccel(std::shared_ptr<IDeviceSelector> selector);
 
-    mfxLoader mfx_handle;
+    // TODO not it is global variable. Waiting for FIX issue with CloneSession
+    // mfxLoader mfx_handle;
     mfxImplDescription *mfx_impl_description;
     std::vector<mfxConfig> mfx_handle_configs;
     std::vector<CfgParam> cfg_params;
@@ -64,6 +56,8 @@ private:
     bool description_is_valid;
 
     std::unique_ptr<ProcessingEngineBase> engine;
+
+    size_t consumed_frames_count;
 };
 } // namespace onevpl
 } // namespace wip

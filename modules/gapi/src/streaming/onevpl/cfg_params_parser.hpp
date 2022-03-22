@@ -8,12 +8,7 @@
 #define GAPI_STREAMING_ONEVPL_CFG_PARAM_PARSER_HPP
 
 #ifdef HAVE_ONEVPL
-#if (MFX_VERSION >= 2000)
-#include <vpl/mfxdispatcher.h>
-#endif // MFX_VERSION
-
-#include <vpl/mfx.h>
-#include <vpl/mfxvideo.h>
+#include "streaming/onevpl/onevpl_export.hpp"
 
 #include <map>
 #include <string>
@@ -31,10 +26,19 @@ std::vector<ValueType> get_params_from_string(const std::string& str);
 template <typename ReturnType>
 struct ParamCreator {
     template<typename ValueType>
-    ReturnType create(const std::string& name, ValueType&& value);
+    ReturnType create(const std::string& name, ValueType&& value, bool is_major = false);
 };
 
 mfxVariant cfg_param_to_mfx_variant(const CfgParam& value);
+
+void extract_optional_param_by_name(const std::string &name,
+                                    const std::vector<CfgParam>& in_params,
+                                    cv::util::optional<size_t> &out_param);
+
+unsigned long strtoul_or_throw(const char* str);
+size_t strtoull_or_throw(const char* str);
+int64_t strtoll_or_throw(const char* str);
+
 } // namespace onevpl
 } // namespace wip
 } // namespace gapi

@@ -13,6 +13,7 @@
 #include <opencv2/gapi/streaming/onevpl/source.hpp>
 #include <opencv2/gapi/streaming/onevpl/data_provider_interface.hpp>
 #include <opencv2/highgui.hpp> // CommandLineParser
+#include <opencv2/gapi/infer/parsers.hpp>
 
 #ifdef HAVE_INF_ENGINE
 #include <inference_engine.hpp> // ParamMap
@@ -37,15 +38,21 @@
 const std::string about =
     "This is an OpenCV-based version of oneVPLSource decoder example";
 const std::string keys =
-    "{ h help       |                                           | Print this help message }"
-    "{ input        |                                           | Path to the input demultiplexed video file }"
-    "{ output       |                                           | Path to the output RAW video file. Use .avi extension }"
-    "{ facem        | face-detection-adas-0001.xml              | Path to OpenVINO IE face detection model (.xml) }"
-    "{ faced        | CPU                                       | Target device for face detection model (e.g. CPU, GPU, VPU, ...) }"
-    "{ cfg_params   | <prop name>:<value>;<prop name>:<value>   | Semicolon separated list of oneVPL mfxVariants which is used for configuring source (see `MFXSetConfigFilterProperty` by https://spec.oneapi.io/versions/latest/elements/oneVPL/source/index.html) }";
-
+    "{ h help                       |                                           | Print this help message }"
+    "{ input                        |                                           | Path to the input demultiplexed video file }"
+    "{ output                       |                                           | Path to the output RAW video file. Use .avi extension }"
+    "{ facem                        | face-detection-adas-0001.xml              | Path to OpenVINO IE face detection model (.xml) }"
+    "{ faced                        | AUTO                                      | Target device for face detection model (e.g. AUTO, GPU, VPU, ...) }"
+    "{ cfg_params                   | <prop name>:<value>;<prop name>:<value>   | Semicolon separated list of oneVPL mfxVariants which is used for configuring source (see `MFXSetConfigFilterProperty` by https://spec.oneapi.io/versions/latest/elements/oneVPL/source/index.html) }"
+    "{ streaming_queue_capacity     | 1                                         | Streaming executor queue capacity. Calculated automaticaly if 0 }"
+    "{ frames_pool_size             | 0                                         | OneVPL source applies this parameter as preallocated frames pool size}"
+    "{ vpp_frames_pool_size         | 0                                         | OneVPL source applies this parameter as preallocated frames pool size for VPP preprocessing results}";
 
 namespace {
+bool is_gpu(const std::string &device_name) {
+    return device_name.find("GPU") != std::string::npos;
+}
+
 std::string get_weights_path(const std::string &model_path) {
     const auto EXT_LEN = 4u;
     const auto sz = model_path.size();
@@ -120,15 +127,10 @@ using GRect       = cv::GOpaque<cv::Rect>;
 using GSize       = cv::GOpaque<cv::Size>;
 using GPrims      = cv::GArray<cv::gapi::wip::draw::Prim>;
 
-G_API_OP(LocateROI, <GRect(GSize)>, "sample.custom.locate-roi") {
-    static cv::GOpaqueDesc outMeta(const cv::GOpaqueDesc &) {
+G_API_OP(LocateROI, <GRect(GSize, std::reference_wrapper<const std::string>)>, "sample.custom.locate-roi") {
+    static cv::GOpaqueDesc outMeta(const cv::GOpaqueDesc &,
+                                   std::reference_wrapper<const std::string>) {
         return cv::empty_gopaque_desc();
-    }
-};
-
-G_API_OP(ParseSSD, <GDetections(cv::GMat, GRect, GSize)>, "sample.custom.parse-ssd") {
-    static cv::GArrayDesc outMeta(const cv::GMatDesc &, const cv::GOpaqueDesc &, const cv::GOpaqueDesc &) {
-        return cv::empty_array_desc();
     }
 };
 
@@ -148,66 +150,29 @@ GAPI_OCV_KERNEL(OCVLocateROI, LocateROI) {
     // but only crops the input image to square (this is
     // the most convenient aspect ratio for detectors to use)
 
-    static void run(const cv::Size& in_size, cv::Rect &out_rect) {
+    static void run(const cv::Size& in_size,
+                    std::reference_wrapper<const std::string> device_id_ref,
+                    cv::Rect &out_rect) {
 
         // Identify the central point & square size (- some padding)
-        const auto center = cv::Point{in_size.width/2, in_size.height/2};
-        auto sqside = std::min(in_size.width, in_size.height);
+        // NB: GPU plugin in InferenceEngine doesn't support ROI at now
+        if (!is_gpu(device_id_ref.get())) {
+            const auto center = cv::Point{in_size.width/2, in_size.height/2};
+            auto sqside = std::min(in_size.width, in_size.height);
 
-        // Now build the central square ROI
-        out_rect = cv::Rect{ center.x - sqside/2
-                           , center.y - sqside/2
-                           , sqside
-                           , sqside
-                           };
-    }
-};
-
-GAPI_OCV_KERNEL(OCVParseSSD, ParseSSD) {
-    static void run(const cv::Mat &in_ssd_result,
-                    const cv::Rect &in_roi,
-                    const cv::Size &in_parent_size,
-                    std::vector<cv::Rect> &out_objects) {
-        const auto &in_ssd_dims = in_ssd_result.size;
-        CV_Assert(in_ssd_dims.dims() == 4u);
-
-        const int MAX_PROPOSALS = in_ssd_dims[2];
-        const int OBJECT_SIZE   = in_ssd_dims[3];
-        CV_Assert(OBJECT_SIZE  == 7); // fixed SSD object size
-
-        const cv::Size up_roi = in_roi.size();
-        const cv::Rect surface({0,0}, in_parent_size);
-
-        out_objects.clear();
-
-        const float *data = in_ssd_result.ptr<float>();
-        for (int i = 0; i < MAX_PROPOSALS; i++) {
-            const float image_id   = data[i * OBJECT_SIZE + 0];
-            const float label      = data[i * OBJECT_SIZE + 1];
-            const float confidence = data[i * OBJECT_SIZE + 2];
-            const float rc_left    = data[i * OBJECT_SIZE + 3];
-            const float rc_top     = data[i * OBJECT_SIZE + 4];
-            const float rc_right   = data[i * OBJECT_SIZE + 5];
-            const float rc_bottom  = data[i * OBJECT_SIZE + 6];
-            (void) label; // unused
-
-            if (image_id < 0.f) {
-                break;    // marks end-of-detections
-            }
-            if (confidence < 0.5f) {
-                continue; // skip objects with low confidence
-            }
-
-            // map relative coordinates to the original image scale
-            // taking the ROI into account
-            cv::Rect rc;
-            rc.x      = static_cast<int>(rc_left   * up_roi.width);
-            rc.y      = static_cast<int>(rc_top    * up_roi.height);
-            rc.width  = static_cast<int>(rc_right  * up_roi.width)  - rc.x;
-            rc.height = static_cast<int>(rc_bottom * up_roi.height) - rc.y;
-            rc.x += in_roi.x;
-            rc.y += in_roi.y;
-            out_objects.emplace_back(rc & surface);
+            // Now build the central square ROI
+            out_rect = cv::Rect{ center.x - sqside/2
+                                , center.y - sqside/2
+                                , sqside
+                                , sqside
+                                };
+        } else {
+            // use whole frame for GPU device
+            out_rect = cv::Rect{ 0
+                                , 0
+                                , in_size.width
+                                , in_size.height
+                                };
         }
     }
 };
@@ -245,9 +210,13 @@ int main(int argc, char *argv[]) {
     }
 
     // get file name
-    std::string file_path = cmd.get<std::string>("input");
-    const std::string output = cmd.get<std::string>("output");
+    const auto file_path = cmd.get<std::string>("input");
+    const auto output = cmd.get<std::string>("output");
     const auto face_model_path = cmd.get<std::string>("facem");
+    const auto streaming_queue_capacity = cmd.get<uint32_t>("streaming_queue_capacity");
+    const auto source_decode_queue_capacity = cmd.get<uint32_t>("frames_pool_size");
+    const auto source_vpp_queue_capacity = cmd.get<uint32_t>("vpp_frames_pool_size");
+    const auto device_id = cmd.get<std::string>("faced");
 
     // check ouput file extension
     if (!output.empty()) {
@@ -271,7 +240,13 @@ int main(int argc, char *argv[]) {
         return -1;
     }
 
-    const std::string& device_id = cmd.get<std::string>("faced");
+    if (source_decode_queue_capacity != 0) {
+        source_cfgs.push_back(cv::gapi::wip::onevpl::CfgParam::create_frames_pool_size(source_decode_queue_capacity));
+    }
+    if (source_vpp_queue_capacity != 0) {
+        source_cfgs.push_back(cv::gapi::wip::onevpl::CfgParam::create_vpp_frames_pool_size(source_vpp_queue_capacity));
+    }
+
     auto face_net = cv::gapi::ie::Params<custom::FaceDetector> {
         face_model_path,                 // path to topology IR
         get_weights_path(face_model_path),   // path to weights
@@ -293,7 +268,7 @@ int main(int argc, char *argv[]) {
     auto dx11_dev = createCOMPtrGuard<ID3D11Device>();
     auto dx11_ctx = createCOMPtrGuard<ID3D11DeviceContext>();
 
-    if (device_id.find("GPU") != std::string::npos) {
+    if (is_gpu(device_id)) {
         auto adapter_factory = createCOMPtrGuard<IDXGIFactory>();
         {
             IDXGIFactory* out_factory = nullptr;
@@ -340,24 +315,29 @@ int main(int argc, char *argv[]) {
 #endif // HAVE_D3D11
 #endif // HAVE_DIRECTX
     // set ctx_config for GPU device only - no need in case of CPU device type
-    if (device_id.find("GPU") != std::string::npos) {
+    if (is_gpu(device_id)) {
         InferenceEngine::ParamMap ctx_config({{"CONTEXT_TYPE", "VA_SHARED"},
-                                            {"VA_DEVICE", accel_device_ptr} });
-
+                                              {"VA_DEVICE", accel_device_ptr} });
         face_net.cfgContextParams(ctx_config);
+
+        // NB: consider NV12 surface because it's one of native GPU image format
+        face_net.pluginConfig({{"GPU_NV12_TWO_INPUTS", "YES" }});
     }
 #endif // HAVE_INF_ENGINE
 
     auto kernels = cv::gapi::kernels
         < custom::OCVLocateROI
-        , custom::OCVParseSSD
         , custom::OCVBBoxes>();
     auto networks = cv::gapi::networks(face_net);
+    auto face_detection_args = cv::compile_args(networks, kernels);
+    if (streaming_queue_capacity != 0) {
+        face_detection_args += cv::compile_args(cv::gapi::streaming::queue_capacity{ streaming_queue_capacity });
+    }
 
     // Create source
     cv::Ptr<cv::gapi::wip::IStreamSource> cap;
     try {
-        if (device_id.find("GPU") != std::string::npos) {
+        if (is_gpu(device_id)) {
             cap = cv::gapi::wip::make_onevpl_src(file_path, source_cfgs,
                                                  device_id,
                                                  accel_device_ptr,
@@ -377,16 +357,16 @@ int main(int argc, char *argv[]) {
     // Now build the graph
     cv::GFrame in;
     auto size = cv::gapi::streaming::size(in);
-    auto roi = custom::LocateROI::on(size);
-    auto blob = cv::gapi::infer<custom::FaceDetector>(roi, in);
-    auto rcs = custom::ParseSSD::on(blob, roi, size);
+    auto roi = custom::LocateROI::on(size, std::cref(device_id));
+    auto blob = cv::gapi::infer<custom::FaceDetector>(in);
+    cv::GArray<cv::Rect> rcs = cv::gapi::parseSSD(blob, size, 0.5f, true, true);
     auto out_frame = cv::gapi::wip::draw::renderFrame(in, custom::BBoxes::on(rcs, roi));
     auto out = cv::gapi::streaming::BGR(out_frame);
 
     cv::GStreamingCompiled pipeline;
     try {
         pipeline = cv::GComputation(cv::GIn(in), cv::GOut(out))
-                .compileStreaming(cv::compile_args(kernels, networks));
+                .compileStreaming(std::move(face_detection_args));
     } catch (const std::exception& ex) {
         std::cerr << "Exception occured during pipeline construction: " << ex.what() << std::endl;
         return -1;
@@ -398,8 +378,8 @@ int main(int argc, char *argv[]) {
     pipeline.setSource(std::move(cap));
     pipeline.start();
 
-    int framesCount = 0;
-    cv::TickMeter t;
+    size_t frames = 0u;
+    cv::TickMeter tm;
     cv::VideoWriter writer;
     if (!output.empty() && !writer.isOpened()) {
         const auto sz = cv::Size{frame_descr.size.width, frame_descr.size.height};
@@ -408,20 +388,17 @@ int main(int argc, char *argv[]) {
     }
 
     cv::Mat outMat;
-    t.start();
+    tm.start();
     while (pipeline.pull(cv::gout(outMat))) {
         cv::imshow("Out", outMat);
         cv::waitKey(1);
         if (!output.empty()) {
             writer << outMat;
         }
-        framesCount++;
+        ++frames;
     }
-    t.stop();
-    std::cout << "Elapsed time: " << t.getTimeSec() << std::endl;
-    std::cout << "FPS: " << framesCount /  t.getTimeSec() << std::endl;
-    std::cout << "framesCount: " << framesCount << std::endl;
-
+    tm.stop();
+    std::cout << "Processed " << frames << " frames" << " (" << frames / tm.getTimeSec() << " FPS)" << std::endl;
     return 0;
 }
 
@@ -443,6 +420,8 @@ typename cv::gapi::wip::onevpl::CfgParam create_from_string(const std::string &l
     std::string name = line.substr(0, name_endline_pos);
     std::string value = line.substr(name_endline_pos + 1);
 
-    return cv::gapi::wip::onevpl::CfgParam::create(name, value);
+    return cv::gapi::wip::onevpl::CfgParam::create(name, value,
+                                                   /* vpp params strongly optional */
+                                                   name.find("vpp.") == std::string::npos);
 }
 }
