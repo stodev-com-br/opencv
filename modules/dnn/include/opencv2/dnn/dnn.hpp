@@ -75,6 +75,7 @@ CV__DNN_INLINE_NS_BEGIN
         DNN_BACKEND_VKCOM,
         DNN_BACKEND_CUDA,
         DNN_BACKEND_WEBNN,
+        DNN_BACKEND_TIMVX,
 #ifdef __OPENCV_BUILD
         DNN_BACKEND_INFERENCE_ENGINE_NGRAPH = 1000000,     // internal - use DNN_BACKEND_INFERENCE_ENGINE + setInferenceEngineBackendType()
         DNN_BACKEND_INFERENCE_ENGINE_NN_BUILDER_2019,      // internal - use DNN_BACKEND_INFERENCE_ENGINE + setInferenceEngineBackendType()
@@ -95,7 +96,8 @@ CV__DNN_INLINE_NS_BEGIN
         DNN_TARGET_FPGA,  //!< FPGA device with CPU fallbacks using Inference Engine's Heterogeneous plugin.
         DNN_TARGET_CUDA,
         DNN_TARGET_CUDA_FP16,
-        DNN_TARGET_HDDL
+        DNN_TARGET_HDDL,
+        DNN_TARGET_NPU,
     };
 
     CV_EXPORTS std::vector< std::pair<Backend, Target> > getAvailableBackends();
@@ -321,6 +323,19 @@ CV__DNN_INLINE_NS_BEGIN
             const std::vector<Ptr<BackendWrapper>>& outputs
         );
 
+        /**
+         * @brief Returns a TimVX backend node
+         *
+         * @param   timVxInfo  void pointer to CSLContext object
+         * @param   inputsWrapper   layer inputs
+         * @param   outputsWrapper  layer outputs
+         * @param   isLast if the node is the last one of the TimVX Graph.
+         */
+        virtual Ptr<BackendNode> initTimVX(void* timVxInfo,
+                                           const std::vector<Ptr<BackendWrapper> > &inputsWrapper,
+                                           const std::vector<Ptr<BackendWrapper> > &outputsWrapper,
+                                           bool isLast);
+
        /**
         * @brief Automatic Halide scheduling based on layer hyper-parameters.
         * @param[in] node Backend node with Halide functions.
@@ -389,7 +404,7 @@ CV__DNN_INLINE_NS_BEGIN
 
 
         /**
-         * @brief "Deattaches" all the layers, attached to particular layer.
+         * @brief "Detaches" all the layers, attached to particular layer.
          */
         virtual void unsetAttached();
 
@@ -1579,7 +1594,7 @@ public:
      * - top-right
      * - bottom-right
      *
-     * Use cv::getPerspectiveTransform function to retrive image region without perspective transformations.
+     * Use cv::getPerspectiveTransform function to retrieve image region without perspective transformations.
      *
      * @note If DL model doesn't support that kind of output then result may be derived from detectTextRectangles() output.
      *
