@@ -312,6 +312,18 @@ bool TiffDecoder::readHeader()
                 result = true;
                 break;
             }
+            case 4:
+                //support 4-bit palette.
+                if (photometric == PHOTOMETRIC_PALETTE)
+                {
+                    CV_Check((int)sample_format, sample_format == SAMPLEFORMAT_UINT || sample_format == SAMPLEFORMAT_INT, "");
+                    int depth = sample_format == SAMPLEFORMAT_INT ? CV_8S : CV_8U;
+                    m_type = CV_MAKETYPE(depth, 3);
+                    result = true;
+                }
+                else
+                    CV_Error(cv::Error::StsError, "bitsperpixel value is 4 should be palette.");
+                break;
             case 8:
             {
                 //Palette color, the value of the component is used as an index into the red,
@@ -1121,7 +1133,7 @@ bool TiffEncoder::writeLibTiff( const std::vector<Mat>& img_vec, const std::vect
 
         CV_TIFF_CHECK_CALL(TIFFSetField(tif, TIFFTAG_SAMPLEFORMAT, sample_format));
 
-        if (page_compression != COMPRESSION_NONE)
+        if (page_compression == COMPRESSION_LZW || page_compression == COMPRESSION_ADOBE_DEFLATE || page_compression == COMPRESSION_DEFLATE)
         {
             CV_TIFF_CHECK_CALL(TIFFSetField(tif, TIFFTAG_PREDICTOR, predictor));
         }

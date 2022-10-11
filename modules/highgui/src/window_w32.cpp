@@ -2132,6 +2132,7 @@ cvDestroyAllWindows(void)
 
 static void showSaveDialog(CvWindow& window)
 {
+#ifdef HAVE_OPENCV_IMGCODECS
     if (!window.image)
         return;
 
@@ -2155,7 +2156,7 @@ static void showSaveDialog(CvWindow& window)
 #endif
     ofn.hwndOwner = window.hwnd;
     ofn.lpstrFilter =
-#ifdef HAVE_PNG
+#if defined(HAVE_PNG) || defined(HAVE_SPNG)
                       "Portable Network Graphics files (*.png)\0*.png\0"
 #endif
                       "Windows bitmap (*.bmp;*.dib)\0*.bmp;*.dib\0"
@@ -2181,7 +2182,7 @@ static void showSaveDialog(CvWindow& window)
     ofn.lpstrFile = szFileName;
     ofn.nMaxFile = MAX_PATH;
     ofn.Flags = OFN_EXPLORER | OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_NOREADONLYRETURN | OFN_NOCHANGEDIR;
-#ifdef HAVE_PNG
+#if defined(HAVE_PNG) || defined(HAVE_SPNG)
     ofn.lpstrDefExt = "png";
 #else
     ofn.lpstrDefExt = "bmp";
@@ -2193,6 +2194,11 @@ static void showSaveDialog(CvWindow& window)
         cv::flip(cv::Mat(sz.cy, sz.cx, CV_8UC(channels), data, (sz.cx * channels + 3) & -4), tmp, 0);
         cv::imwrite(szFileName, tmp);
     }
+#else
+    CV_UNUSED(window);
+    CV_LOG_WARNING("Save dialog requires enabled 'imgcodecs' module.");
+    return;
+#endif
 }
 
 /*

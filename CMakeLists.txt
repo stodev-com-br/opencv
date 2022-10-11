@@ -281,6 +281,9 @@ OCV_OPTION(WITH_GTK "Include GTK support" ON
 OCV_OPTION(WITH_GTK_2_X "Use GTK version 2" OFF
   VISIBLE_IF UNIX AND NOT APPLE AND NOT ANDROID
   VERIFY HAVE_GTK AND NOT HAVE_GTK3)
+OCV_OPTION(WITH_WAYLAND "Include Wayland support" OFF
+        VISIBLE_IF UNIX AND NOT APPLE AND NOT ANDROID
+        VERIFY HAVE_WAYLAND)
 OCV_OPTION(WITH_IPP "Include Intel IPP support" (NOT MINGW AND NOT CV_DISABLE_OPTIMIZATION)
   VISIBLE_IF (X86_64 OR X86) AND NOT WINRT AND NOT IOS
   VERIFY HAVE_IPP)
@@ -327,6 +330,9 @@ OCV_OPTION(WITH_OPENNI2 "Include OpenNI2 support" OFF
 OCV_OPTION(WITH_PNG "Include PNG support" ON
   VISIBLE_IF TRUE
   VERIFY HAVE_PNG)
+OCV_OPTION(WITH_SPNG "Include SPNG support" OFF
+  VISIBLE_IF TRUE
+  VERIFY HAVE_SPNG)
 OCV_OPTION(WITH_GDCM "Include DICOM support" OFF
   VISIBLE_IF TRUE
   VERIFY HAVE_GDCM)
@@ -456,6 +462,9 @@ OCV_OPTION(WITH_ONNX "Include Microsoft ONNX Runtime support" OFF
 OCV_OPTION(WITH_TIMVX "Include Tim-VX support" OFF
   VISIBLE_IF TRUE
   VERIFY HAVE_TIMVX)
+OCV_OPTION(WITH_OBSENSOR "Include obsensor support (Orbbec RGB-D modules: Astra+/Femto)" ON
+  VISIBLE_IF (WIN32 AND NOT ARM AND NOT WINRT) OR ( UNIX AND NOT APPLE AND NOT ANDROID)
+  VERIFY HAVE_OBSENSOR)
 
 # OpenCV build components
 # ===================================================
@@ -635,7 +644,7 @@ ocv_cmake_hook(POST_COMPILER_OPTIONS)
 # ----------------------------------------------------------------------------
 #       CHECK FOR SYSTEM LIBRARIES, OPTIONS, ETC..
 # ----------------------------------------------------------------------------
-if(UNIX)
+if(UNIX OR MINGW)
   if(NOT APPLE_FRAMEWORK OR OPENCV_ENABLE_PKG_CONFIG)
     if(CMAKE_CROSSCOMPILING AND NOT DEFINED ENV{PKG_CONFIG_LIBDIR} AND NOT DEFINED ENV{PKG_CONFIG_SYSROOT_DIR}
         AND NOT OPENCV_ENABLE_PKG_CONFIG
@@ -667,6 +676,8 @@ if(UNIX)
       # no need to link to system libs with emscripten
     elseif(QNXNTO)
       set(OPENCV_LINKER_LIBS ${OPENCV_LINKER_LIBS} m)
+    elseif(MINGW)
+      set(OPENCV_LINKER_LIBS ${OPENCV_LINKER_LIBS} pthread)
     else()
       set(OPENCV_LINKER_LIBS ${OPENCV_LINKER_LIBS} dl m pthread rt)
     endif()
@@ -1260,6 +1271,24 @@ endif(WIN32)
 status("")
 status("  GUI: " "${OPENCV_HIGHGUI_BUILTIN_BACKEND}")
 
+if(WITH_WAYLAND OR HAVE_WAYLAND)
+  if(HAVE_WAYLAND_CLIENT)
+    status("    Wayland Client:" "YES (ver ${WAYLAND_CLIENT_VERSION})")
+  endif()
+  if(HAVE_WAYLAND_CURSOR)
+    status("    Wayland Cursor:" "YES (ver ${WAYLAND_CURSOR_VERSION})")
+  endif()
+  if(HAVE_WAYLAND_PROTOCOL)
+    status("    Wayland Protocol:" "YES (ver ${WAYLAND_PROTOCOL_VERSION})")
+  endif()
+  if(HAVE_WAYLAND_EGL)
+    status("    Wayland EGL:" "YES (ver ${WAYLAND_EGL_VERSION})")
+  endif()
+  if(HAVE_XKBCOMMON)
+    status("    Xkbcommon:" "YES (ver ${XKBCOMMON_VERSION})")
+  endif()
+endif()
+
 if(WITH_QT OR HAVE_QT)
   if(HAVE_QT)
     status("    QT:" "YES (ver ${QT_VERSION_MAJOR}.${QT_VERSION_MINOR}.${QT_VERSION_PATCH} ${QT_EDITION})")
@@ -1317,6 +1346,16 @@ if(WITH_JPEG OR HAVE_JPEG)
     status("    JPEG:" NO)
   elseif(BUILD_JPEG)
     status("    JPEG:" "build-${JPEG_LIBRARY} (ver ${JPEG_LIB_VERSION})")
+    if(ENABLE_LIBJPEG_TURBO_SIMD)
+      status("        SIMD Support Request:" "YES")
+      if(HAVE_LIBJPEG_TURBO_SIMD)
+        status("        SIMD Support:" "YES")
+      else()
+        status("        SIMD Support:" "NO")
+      endif()
+    else()
+      status("        SIMD Support Request:" "NO")
+    endif()
   else()
     status("    JPEG:" "${JPEG_LIBRARY} (ver ${JPEG_LIB_VERSION})")
   endif()
@@ -1326,8 +1365,12 @@ if(WITH_WEBP OR HAVE_WEBP)
   status("    WEBP:" WEBP_FOUND THEN "${WEBP_LIBRARY} (ver ${WEBP_VERSION})" ELSE "build (ver ${WEBP_VERSION})")
 endif()
 
-if(WITH_PNG OR HAVE_PNG)
-  status("    PNG:"  PNG_FOUND  THEN "${PNG_LIBRARY} (ver ${PNG_VERSION})" ELSE "build (ver ${PNG_VERSION})")
+if(WITH_PNG OR HAVE_PNG OR WITH_SPNG)
+  if(WITH_SPNG)
+    status("    PNG:" "build-${SPNG_LIBRARY} (ver ${SPNG_VERSION})")
+  else()
+    status("    PNG:"  PNG_FOUND  THEN "${PNG_LIBRARY} (ver ${PNG_VERSION})" ELSE "build (ver ${PNG_VERSION})")
+  endif()
 endif()
 
 if(WITH_TIFF OR HAVE_TIFF)

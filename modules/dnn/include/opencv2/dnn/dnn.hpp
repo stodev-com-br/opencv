@@ -52,6 +52,11 @@
 
 namespace cv {
 namespace dnn {
+
+namespace accessor {
+class DnnNetAccessor;  // forward declaration
+}
+
 CV__DNN_INLINE_NS_BEGIN
 //! @addtogroup dnn
 //! @{
@@ -65,20 +70,22 @@ CV__DNN_INLINE_NS_BEGIN
     enum Backend
     {
         //! DNN_BACKEND_DEFAULT equals to DNN_BACKEND_INFERENCE_ENGINE if
-        //! OpenCV is built with Intel's Inference Engine library or
+        //! OpenCV is built with Intel OpenVINO or
         //! DNN_BACKEND_OPENCV otherwise.
         DNN_BACKEND_DEFAULT = 0,
         DNN_BACKEND_HALIDE,
-        DNN_BACKEND_INFERENCE_ENGINE,            //!< Intel's Inference Engine computational backend
-                                                 //!< @sa setInferenceEngineBackendType
+        DNN_BACKEND_INFERENCE_ENGINE,            //!< Intel OpenVINO computational backend
+                                                 //!< @note Tutorial how to build OpenCV with OpenVINO: @ref tutorial_dnn_openvino
         DNN_BACKEND_OPENCV,
         DNN_BACKEND_VKCOM,
         DNN_BACKEND_CUDA,
         DNN_BACKEND_WEBNN,
         DNN_BACKEND_TIMVX,
-#ifdef __OPENCV_BUILD
+#if defined(__OPENCV_BUILD) || defined(BUILD_PLUGIN)
+#if !defined(OPENCV_BINDING_PARSER)
         DNN_BACKEND_INFERENCE_ENGINE_NGRAPH = 1000000,     // internal - use DNN_BACKEND_INFERENCE_ENGINE + setInferenceEngineBackendType()
         DNN_BACKEND_INFERENCE_ENGINE_NN_BUILDER_2019,      // internal - use DNN_BACKEND_INFERENCE_ENGINE + setInferenceEngineBackendType()
+#endif
 #endif
     };
 
@@ -621,8 +628,10 @@ CV__DNN_INLINE_NS_BEGIN
          *  @param calibData Calibration data to compute the quantization parameters.
          *  @param inputsDtype Datatype of quantized net's inputs. Can be CV_32F or CV_8S.
          *  @param outputsDtype Datatype of quantized net's outputs. Can be CV_32F or CV_8S.
+         *  @param perChannel Quantization granularity of quantized Net. The default is true, that means quantize model
+         *  in per-channel way (channel-wise). Set it false to quantize model in per-tensor way (or tensor-wise).
          */
-        CV_WRAP Net quantize(InputArrayOfArrays calibData, int inputsDtype, int outputsDtype);
+        CV_WRAP Net quantize(InputArrayOfArrays calibData, int inputsDtype, int outputsDtype, bool perChannel=true);
 
         /** @brief Returns input scale and zeropoint for a quantized Net.
          *  @param scales output parameter for returning input scales.
@@ -838,8 +847,12 @@ CV__DNN_INLINE_NS_BEGIN
          */
         CV_WRAP int64 getPerfProfile(CV_OUT std::vector<double>& timings);
 
-    private:
+
         struct Impl;
+        inline Impl* getImpl() const { return impl.get(); }
+        inline Impl& getImplRef() const { CV_DbgAssert(impl); return *impl.get(); }
+        friend class accessor::DnnNetAccessor;
+    protected:
         Ptr<Impl> impl;
     };
 

@@ -987,7 +987,8 @@ inline void fill_codec_context(AVCodecContext * enc, AVDictionary * dict)
 //#ifdef FF_API_THREAD_INIT
 //  avcodec_thread_init(enc, get_number_of_cpus());
 //#else
-    enc->thread_count = get_number_of_cpus();
+    const int nCpus = get_number_of_cpus();
+    enc->thread_count = enc->thread_count ? enc->thread_count: nCpus;
 //#endif
 
     AVDictionaryEntry* avdiscard_entry = av_dict_get(dict, "avdiscard", NULL, 0);
@@ -1024,6 +1025,7 @@ bool CvCapture_FFMPEG::open(const char* _filename, const VideoCaptureParameters&
 
     unsigned i;
     bool valid = false;
+    int nThreads = 0;
 
     close();
 
@@ -1081,6 +1083,10 @@ bool CvCapture_FFMPEG::open(const char* _filename, const VideoCaptureParameters&
             read_timeout = params.get<int>(CAP_PROP_READ_TIMEOUT_MSEC);
         }
 #endif
+        if (params.has(CAP_PROP_N_THREADS))
+        {
+            nThreads = params.get<int>(CAP_PROP_N_THREADS);
+        }
         if (params.warnUnusedParameters())
         {
             CV_LOG_ERROR(NULL, "VIDEOIO/FFMPEG: unsupported parameters in .open(), see logger INFO channel for details. Bailout");
@@ -1248,6 +1254,7 @@ bool CvCapture_FFMPEG::open(const char* _filename, const VideoCaptureParameters&
 #endif
                     continue;
                 }
+                context->thread_count = nThreads;
                 fill_codec_context(context, dict);
 #ifdef CV_FFMPEG_CODECPAR
                 avcodec_parameters_to_context(context, par);
@@ -1444,6 +1451,7 @@ bool CvCapture_FFMPEG::grabFrame()
 
 #if USE_AV_INTERRUPT_CALLBACK
     // activate interrupt callback
+    interrupt_metadata.timeout = 0;
     get_monotonic_time(&interrupt_metadata.value);
     interrupt_metadata.timeout_after_ms = read_timeout;
 #endif
@@ -1510,10 +1518,6 @@ bool CvCapture_FFMPEG::grabFrame()
         ret = got_picture ? 0 : -1;
 #endif
         if (ret >= 0) {
-            //picture_pts = picture->best_effort_timestamp;
-            if( picture_pts == AV_NOPTS_VALUE_ )
-                picture_pts = picture->CV_FFMPEG_PTS_FIELD != AV_NOPTS_VALUE_ && picture->CV_FFMPEG_PTS_FIELD != 0 ? picture->CV_FFMPEG_PTS_FIELD : picture->pkt_dts;
-
             valid = true;
         } else if (ret == AVERROR(EAGAIN)) {
             continue;
@@ -1526,8 +1530,11 @@ bool CvCapture_FFMPEG::grabFrame()
         }
     }
 
-    if (valid)
+    if (valid) {
+        if( picture_pts == AV_NOPTS_VALUE_ )
+            picture_pts = picture->CV_FFMPEG_PTS_FIELD != AV_NOPTS_VALUE_ && picture->CV_FFMPEG_PTS_FIELD != 0 ? picture->CV_FFMPEG_PTS_FIELD : picture->pkt_dts;
         frame_number++;
+    }
 
     if (!rawMode && valid && first_frame_number < 0)
         first_frame_number = dts_to_frame_number(picture_pts);
@@ -1633,7 +1640,7 @@ bool CvCapture_FFMPEG::retrieveFrame(int flag, unsigned char** data, int* step, 
             img_convert_ctx,
             sw_picture->data,
             sw_picture->linesize,
-            0, context->coded_height,
+            0, sw_picture->height,
             rgb_picture.data,
             rgb_picture.linesize
             );
@@ -1695,9 +1702,11 @@ double CvCapture_FFMPEG::getProperty( int property_id ) const
         return (double)((rotation_auto && ((rotation_angle%180) != 0)) ? frame.height : frame.width);
     case CAP_PROP_FRAME_HEIGHT:
         return (double)((rotation_auto && ((rotation_angle%180) != 0)) ? frame.width : frame.height);
+    case CAP_PROP_FRAME_TYPE:
+        return (double)av_get_picture_type_char(picture->pict_type);
     case CAP_PROP_FPS:
         return get_fps();
-    case CAP_PROP_FOURCC:
+    case CAP_PROP_FOURCC: {
         codec_id = video_st->CV_FFMPEG_CODEC_FIELD->codec_id;
         codec_tag = (double) video_st->CV_FFMPEG_CODEC_FIELD->codec_tag;
 
@@ -1707,12 +1716,26 @@ double CvCapture_FFMPEG::getProperty( int property_id ) const
         }
 
         codec_fourcc = _opencv_avcodec_get_name(codec_id);
-        if(!codec_fourcc || strlen(codec_fourcc) < 4 || strcmp(codec_fourcc, "unknown_codec") == 0)
+        if (!codec_fourcc || strcmp(codec_fourcc, "unknown_codec") == 0 || strlen(codec_fourcc) != 4)
         {
-            return codec_tag;
+            const struct AVCodecTag* fallback_tags[] = {
+            // APIchanges:
+            // 2012-01-31 - dd6d3b0 - lavf 54.01.0
+            //   Add avformat_get_riff_video_tags() and avformat_get_riff_audio_tags().
+                avformat_get_riff_video_tags(),
+#if LIBAVFORMAT_BUILD >= CALC_FFMPEG_VERSION(55, 25, 100) && defined LIBAVFORMAT_VERSION_MICRO && LIBAVFORMAT_VERSION_MICRO >= 100
+            // APIchanges: ffmpeg only
+            // 2014-01-19 - 1a193c4 - lavf 55.25.100 - avformat.h
+            //   Add avformat_get_mov_video_tags() and avformat_get_mov_audio_tags().
+                avformat_get_mov_video_tags(),
+#endif
+                codec_bmp_tags, // fallback for avformat < 54.1
+                NULL };
+            return av_codec_get_tag(fallback_tags, codec_id);
         }
 
         return (double) CV_FOURCC(codec_fourcc[0], codec_fourcc[1], codec_fourcc[2], codec_fourcc[3]);
+    }
     case CAP_PROP_SAR_NUM:
         return _opencv_ffmpeg_get_sample_aspect_ratio(ic->streams[video_stream]).num;
     case CAP_PROP_SAR_DEN:
@@ -1758,6 +1781,8 @@ double CvCapture_FFMPEG::getProperty( int property_id ) const
     case CAP_PROP_STREAM_OPEN_TIME_USEC:
         //ic->start_time_realtime is in microseconds
         return ((double)ic->start_time_realtime);
+    case CAP_PROP_N_THREADS:
+        return static_cast<double>(context->thread_count);
     default:
         break;
     }
@@ -1840,7 +1865,7 @@ void CvCapture_FFMPEG::get_rotation_angle()
     data = av_stream_get_side_data(video_st, AV_PKT_DATA_DISPLAYMATRIX, NULL);
     if (data)
     {
-        rotation_angle = cvRound(av_display_rotation_get((const int32_t*)data));
+        rotation_angle = -cvRound(av_display_rotation_get((const int32_t*)data));
         if (rotation_angle < 0)
             rotation_angle += 360;
     }
