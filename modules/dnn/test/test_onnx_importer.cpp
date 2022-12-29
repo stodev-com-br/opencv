@@ -199,9 +199,11 @@ TEST_P(Test_ONNX_layers, Convolution_variable_weight_bias)
 
 TEST_P(Test_ONNX_layers, Gather)
 {
-    if (backend == DNN_BACKEND_INFERENCE_ENGINE_NN_BUILDER_2019 && target == DNN_TARGET_MYRIAD)
-        applyTestTag(CV_TEST_TAG_DNN_SKIP_IE_MYRIAD, CV_TEST_TAG_DNN_SKIP_IE_NN_BUILDER);
     testONNXModels("gather", npy, 0, 0, false, false);
+}
+
+TEST_P(Test_ONNX_layers, Gather_Scalar)
+{
     testONNXModels("gather_scalar", npy, 0, 0, false, false);
 }
 
@@ -904,23 +906,37 @@ TEST_P(Test_ONNX_layers, Multiplication)
     testONNXModels("mul");
 }
 
-TEST_P(Test_ONNX_layers, MatMul)
+TEST_P(Test_ONNX_layers, MatMul_2d)
 {
-    if (backend == DNN_BACKEND_INFERENCE_ENGINE_NN_BUILDER_2019)
-        applyTestTag(CV_TEST_TAG_DNN_SKIP_IE_NN_BUILDER);
-
     testONNXModels("matmul_2d");
+}
+TEST_P(Test_ONNX_layers, MatMul_3d)
+{
     testONNXModels("matmul_3d");
+}
+TEST_P(Test_ONNX_layers, MatMul_4d)
+{
     testONNXModels("matmul_4d");
 }
 
-TEST_P(Test_ONNX_layers, MatMul_init)
+TEST_P(Test_ONNX_layers, MatMul_2d_init)
 {
     testONNXModels("matmul_2d_init");
+}
+TEST_P(Test_ONNX_layers, MatMul_3d_init)
+{
     testONNXModels("matmul_3d_init");
+}
+TEST_P(Test_ONNX_layers, MatMul_4d_init)
+{
     testONNXModels("matmul_4d_init");
-
+}
+TEST_P(Test_ONNX_layers, MatMul_init_2)
+{
     testONNXModels("matmul_init_2");
+}
+TEST_P(Test_ONNX_layers, MatMul_init_bcast)
+{
     testONNXModels("matmul_init_bcast");
 }
 
@@ -1131,6 +1147,7 @@ TEST_P(Test_ONNX_layers, Slice)
     testONNXModels("slice");
     testONNXModels("slice_neg_starts");
     testONNXModels("slice_opset_11");
+    testONNXModels("slice_neg_steps", pb);
 #endif
 }
 
