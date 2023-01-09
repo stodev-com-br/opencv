@@ -36,7 +36,25 @@ TEST_P(videoio_ffmpeg, write_big)
     VideoWriter writer(filename, CAP_FFMPEG, fourccFromString(fourcc), fps, sz);
     if (ext == "mp4" && fourcc == "H264" && !writer.isOpened())
     {
-        throw cvtest::SkipTestException("H264/mp4 codec is not supported - SKIP");
+        try
+        {
+            string filename = ts->get_data_path() + "readwrite/ordinary.bmp";
+            VideoCapture cap(filename, CAP_FFMPEG);
+            Mat img0 = imread(filename, IMREAD_COLOR);
+            Mat img, img_next;
+            cap >> img;
+            cap >> img_next;
+
+            CV_Assert( !img0.empty() && !img.empty() && img_next.empty() );
+
+            double diff = cvtest::norm(img0, img, CV_C);
+            CV_Assert( diff == 0 );
+        }
+        catch(...)
+        {
+            ts->set_failed_test_info(ts->FAIL_INVALID_OUTPUT);
+        }
+        ts->set_failed_test_info(cvtest::TS::OK);
     }
     ASSERT_TRUE(writer.isOpened());
     Mat img(sz, CV_8UC3, Scalar::all(0));
