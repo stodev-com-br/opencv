@@ -120,10 +120,8 @@
 //#pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wsuggest-override"
 #endif
-#if defined(__OPENCV_BUILD) && defined(__clang__) && ((__clang_major__*100 + __clang_minor__) >= 1301)
-#pragma clang diagnostic push
+#if defined(__OPENCV_BUILD) && defined(__APPLE__) && defined(__clang__) && ((__clang_major__*100 + __clang_minor__) >= 1301)
 #pragma clang diagnostic ignored "-Wdeprecated-copy"
-#pragma clang diagnostic ignored "-Winconsistent-missing-override"
 #endif
 #include "opencv2/ts/ts_gtest.h"
 #if defined(__OPENCV_BUILD) && defined(__GNUC__) && __GNUC__ >= 5

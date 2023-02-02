@@ -569,6 +569,8 @@ void CV_CameraCalibrationTest::run( int start_from )
         /* ----- Compute reprojection error ----- */
         double dx,dy;
         double rx,ry;
+        double maxDx = 0.0;
+        double maxDy = 0.0;
 
         for( currImage = 0; currImage < numImages; currImage++ )
         {
@@ -576,10 +578,10 @@ void CV_CameraCalibrationTest::run( int start_from )
             double imageMeanDy = 0;
             for( currPoint = 0; currPoint < etalonSize.width * etalonSize.height; currPoint++ )
             {
-                rx = reprojectPoints[currImage][currPoint].x;
-                ry = reprojectPoints[currImage][currPoint].y;
-                dx = rx - imagePoints[currImage][currPoint].x;
-                dy = ry - imagePoints[currImage][currPoint].y;
+                rx = reprojectPoints[i].x;
+                ry = reprojectPoints[i].y;
+                dx = rx - imagePoints[i].x;
+                dy = ry - imagePoints[i].y;
 
                 imageMeanDx += dx*dx;
                 imageMeanDy += dy*dy;

@@ -65,6 +65,7 @@ void CV_OptFlowPyrLKTest::run( int )
 
     /* test parameters */
     double  max_err = 0.;
+    int     pt_cmpd = 0;
     int     pt_exceed = 0;
     int     merr_i = 0, merr_nan = 0;
     char    filename[1000];
@@ -171,6 +172,7 @@ void CV_OptFlowPyrLKTest::run( int )
             }
 
             pt_exceed += err > success_error_level;
+            pt_cmpd++;
         }
         else
         {
