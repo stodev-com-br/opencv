@@ -1279,7 +1279,7 @@ CollectPolyEdges( Mat& img, const Point2l* v, int count, std::vector<PolyEdge>& 
 
         Point2l pt0c(pt0), pt1c(pt1);
 
-        if (line_type < CV_AA)
+        if (line_type < cv::LINE_AA)
         {
             t0.y = pt0.y; t1.y = pt1.y;
             t0.x = (pt0.x + (XY_ONE >> 1)) >> XY_SHIFT;
