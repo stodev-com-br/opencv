@@ -88,6 +88,7 @@ set(gapi_srcs
     src/api/kernels_imgproc.cpp
     src/api/kernels_video.cpp
     src/api/kernels_nnparsers.cpp
+    src/api/kernels_ot.cpp
     src/api/kernels_streaming.cpp
     src/api/kernels_stereo.cpp
     src/api/render.cpp
@@ -130,6 +131,7 @@ set(gapi_srcs
     src/backends/cpu/gcpustereo.cpp
     src/backends/cpu/gcpuvideo.cpp
     src/backends/cpu/gcpucore.cpp
+    src/backends/cpu/gcpuot.cpp
     src/backends/cpu/gnnparsers.cpp
 
     # Fluid Backend (also built-in, FIXME:move away)
@@ -156,8 +158,14 @@ set(gapi_srcs
     src/backends/ie/giebackend.cpp
     src/backends/ie/giebackend/giewrapper.cpp
 
+    # OV Backend. FIXME: should be included by CMake
+    # if and only if OV support is enabled
+    src/backends/ov/govbackend.cpp
+
     # ONNX backend
     src/backends/onnx/gonnxbackend.cpp
+    src/backends/onnx/dml_ep.cpp
+    src/backends/onnx/coreml_ep.cpp
 
     # Render backend
     src/backends/render/grenderocv.cpp
@@ -182,7 +190,11 @@ set(gapi_srcs
     # Python bridge
     src/backends/ie/bindings_ie.cpp
     src/backends/onnx/bindings_onnx.cpp
+    src/backends/ov/bindings_ov.cpp
     src/backends/python/gpythonbackend.cpp
+
+    # Queue Streaming source
+    src/streaming/queue_source.cpp
 
     # OpenVPL Streaming source
     src/streaming/onevpl/source.cpp
@@ -231,17 +243,24 @@ set(gapi_srcs
     src/utils/itt.cpp
     )
 
+file(GLOB_RECURSE gapi_3rdparty_srcs
+    "${CMAKE_CURRENT_LIST_DIR}/src/3rdparty/vasot/src/*.cpp"
+)
+
 ocv_add_dispatched_file(backends/fluid/gfluidimgproc_func SSE4_1 AVX2)
 ocv_add_dispatched_file(backends/fluid/gfluidcore_func SSE4_1 AVX2)
 
 ocv_list_add_prefix(gapi_srcs "${CMAKE_CURRENT_LIST_DIR}/")
 
 # For IDE users
-ocv_source_group("Src"     FILES ${gapi_srcs})
+ocv_source_group("Src"     FILES ${gapi_srcs} ${gapi_3rdparty_srcs})
 ocv_source_group("Include" FILES ${gapi_ext_hdrs})
 
-ocv_set_module_sources(HEADERS ${gapi_ext_hdrs} SOURCES ${gapi_srcs})
+ocv_set_module_sources(HEADERS ${gapi_ext_hdrs} SOURCES ${gapi_srcs} ${gapi_3rdparty_srcs})
 ocv_module_include_directories("${CMAKE_CURRENT_LIST_DIR}/src")
+
+# VAS Object Tracking includes
+ocv_module_include_directories(${CMAKE_CURRENT_LIST_DIR}/src/3rdparty/vasot/include)
 
 ocv_create_module()
 
@@ -249,6 +268,7 @@ ocv_target_link_libraries(${the_module} PRIVATE ade)
 
 if(TARGET ocv.3rdparty.openvino AND OPENCV_GAPI_WITH_OPENVINO)
   ocv_target_link_libraries(${the_module} PRIVATE ocv.3rdparty.openvino)
+  ocv_install_used_external_targets(ocv.3rdparty.openvino)
 endif()
 
 if(HAVE_TBB)
@@ -357,18 +377,26 @@ if(WIN32)
   ocv_target_link_libraries(${the_module} PRIVATE wsock32 ws2_32)
 endif()
 
+if(HAVE_DIRECTML)
+  ocv_target_compile_definitions(${the_module} PRIVATE HAVE_DIRECTML=1)
+endif()
+
 if(HAVE_ONNX)
   ocv_target_link_libraries(${the_module} PRIVATE ${ONNX_LIBRARY})
   ocv_target_compile_definitions(${the_module} PRIVATE HAVE_ONNX=1)
+  if(HAVE_ONNX_DML)
+    ocv_target_compile_definitions(${the_module} PRIVATE HAVE_ONNX_DML=1)
+  endif()
   if(TARGET opencv_test_gapi)
     ocv_target_compile_definitions(opencv_test_gapi PRIVATE HAVE_ONNX=1)
     ocv_target_link_libraries(opencv_test_gapi PRIVATE ${ONNX_LIBRARY})
   endif()
 endif()
 
+ocv_install_3rdparty_licenses(vasot "${CMAKE_CURRENT_SOURCE_DIR}/src/3rdparty/vasot/LICENSE.txt")
+
 ocv_add_perf_tests()
 ocv_add_samples()
-
 
 # Required for sample with inference on host
 if(TARGET example_gapi_onevpl_infer_with_advanced_device_selection)

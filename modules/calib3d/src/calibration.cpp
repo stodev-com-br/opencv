@@ -2517,28 +2517,28 @@ double cvStereoCalibrate( const CvMat* _objectPoints, const CvMat* _imagePoints1
 static void
 icvGetRectangles( const CvMat* cameraMatrix, const CvMat* distCoeffs,
                  const CvMat* R, const CvMat* newCameraMatrix, CvSize imgSize,
-                 cv::Rect_<float>& inner, cv::Rect_<float>& outer )
+                 cv::Rect_<double>& inner, cv::Rect_<double>& outer )
 {
     const int N = 9;
     int x, y, k;
-    cv::Ptr<CvMat> _pts(cvCreateMat(1, N*N, CV_32FC2));
-    CvPoint2D32f* pts = (CvPoint2D32f*)(_pts->data.ptr);
+    cv::Ptr<CvMat> _pts(cvCreateMat(1, N*N, CV_64FC2));
+    CvPoint2D64f* pts = (CvPoint2D64f*)(_pts->data.ptr);
 
     for( y = k = 0; y < N; y++ )
         for( x = 0; x < N; x++ )
-            pts[k++] = cvPoint2D32f((float)x*imgSize.width/(N-1),
-                                    (float)y*imgSize.height/(N-1));
+            pts[k++] = cvPoint2D64f((double)x*(imgSize.width-1)/(N-1),
+                                    (double)y*(imgSize.height-1)/(N-1));
 
     cvUndistortPoints(_pts, _pts, cameraMatrix, distCoeffs, R, newCameraMatrix);
 
-    float iX0=-FLT_MAX, iX1=FLT_MAX, iY0=-FLT_MAX, iY1=FLT_MAX;
-    float oX0=FLT_MAX, oX1=-FLT_MAX, oY0=FLT_MAX, oY1=-FLT_MAX;
+    double iX0=-FLT_MAX, iX1=FLT_MAX, iY0=-FLT_MAX, iY1=FLT_MAX;
+    double oX0=FLT_MAX, oX1=-FLT_MAX, oY0=FLT_MAX, oY1=-FLT_MAX;
     // find the inscribed rectangle.
     // the code will likely not work with extreme rotation matrices (R) (>45%)
     for( y = k = 0; y < N; y++ )
         for( x = 0; x < N; x++ )
         {
-            CvPoint2D32f p = pts[k++];
+            CvPoint2D64f p = pts[k++];
             oX0 = MIN(oX0, p.x);
             oX1 = MAX(oX1, p.x);
             oY0 = MIN(oY0, p.y);
@@ -2553,8 +2553,8 @@ icvGetRectangles( const CvMat* cameraMatrix, const CvMat* distCoeffs,
             if( y == N-1 )
                 iY1 = MIN(iY1, p.y);
         }
-    inner = cv::Rect_<float>(iX0, iY0, iX1-iX0, iY1-iY0);
-    outer = cv::Rect_<float>(oX0, oY0, oX1-oX0, oY1-oY0);
+    inner = cv::Rect_<double>(iX0, iY0, iX1-iX0, iY1-iY0);
+    outer = cv::Rect_<double>(oX0, oY0, oX1-oX0, oY1-oY0);
 }
 
 
@@ -2567,7 +2567,7 @@ void cvStereoRectify( const CvMat* _cameraMatrix1, const CvMat* _cameraMatrix2,
 {
     double _om[3], _t[3] = {0}, _uu[3]={0,0,0}, _r_r[3][3], _pp[3][4];
     double _ww[3], _wr[3][3], _z[3] = {0,0,0}, _ri[3][3];
-    cv::Rect_<float> inner1, inner2, outer1, outer2;
+    cv::Rect_<double> inner1, inner2, outer1, outer2;
 
     CvMat om  = cvMat(3, 1, CV_64F, _om);
     CvMat t   = cvMat(3, 1, CV_64F, _t);
@@ -2699,19 +2699,19 @@ void cvStereoRectify( const CvMat* _cameraMatrix1, const CvMat* _cameraMatrix2,
     if( alpha >= 0 )
     {
         double s0 = std::max(std::max(std::max((double)cx1/(cx1_0 - inner1.x), (double)cy1/(cy1_0 - inner1.y)),
-                            (double)(newImgSize.width - cx1)/(inner1.x + inner1.width - cx1_0)),
-                        (double)(newImgSize.height - cy1)/(inner1.y + inner1.height - cy1_0));
+                            (double)(newImgSize.width - 1 - cx1)/(inner1.x + inner1.width - cx1_0)),
+                        (double)(newImgSize.height - 1 - cy1)/(inner1.y + inner1.height - cy1_0));
         s0 = std::max(std::max(std::max(std::max((double)cx2/(cx2_0 - inner2.x), (double)cy2/(cy2_0 - inner2.y)),
-                         (double)(newImgSize.width - cx2)/(inner2.x + inner2.width - cx2_0)),
-                     (double)(newImgSize.height - cy2)/(inner2.y + inner2.height - cy2_0)),
+                         (double)(newImgSize.width - 1 - cx2)/(inner2.x + inner2.width - cx2_0)),
+                     (double)(newImgSize.height - 1 - cy2)/(inner2.y + inner2.height - cy2_0)),
                  s0);
 
         double s1 = std::min(std::min(std::min((double)cx1/(cx1_0 - outer1.x), (double)cy1/(cy1_0 - outer1.y)),
-                            (double)(newImgSize.width - cx1)/(outer1.x + outer1.width - cx1_0)),
-                        (double)(newImgSize.height - cy1)/(outer1.y + outer1.height - cy1_0));
+                            (double)(newImgSize.width - 1 - cx1)/(outer1.x + outer1.width - cx1_0)),
+                        (double)(newImgSize.height - 1 - cy1)/(outer1.y + outer1.height - cy1_0));
         s1 = std::min(std::min(std::min(std::min((double)cx2/(cx2_0 - outer2.x), (double)cy2/(cy2_0 - outer2.y)),
-                         (double)(newImgSize.width - cx2)/(outer2.x + outer2.width - cx2_0)),
-                     (double)(newImgSize.height - cy2)/(outer2.y + outer2.height - cy2_0)),
+                         (double)(newImgSize.width - 1 - cx2)/(outer2.x + outer2.width - cx2_0)),
+                     (double)(newImgSize.height - 1 - cy2)/(outer2.y + outer2.height - cy2_0)),
                  s1);
 
         s = s0*(1 - alpha) + s1*alpha;
@@ -2774,7 +2774,7 @@ void cvGetOptimalNewCameraMatrix( const CvMat* cameraMatrix, const CvMat* distCo
                                   CvMat* newCameraMatrix, CvSize newImgSize,
                                   CvRect* validPixROI, int centerPrincipalPoint )
 {
-    cv::Rect_<float> inner, outer;
+    cv::Rect_<double> inner, outer;
     newImgSize = newImgSize.width*newImgSize.height != 0 ? newImgSize : imgSize;
 
     double M[3][3];
@@ -2804,10 +2804,10 @@ void cvGetOptimalNewCameraMatrix( const CvMat* cameraMatrix, const CvMat* distCo
 
         if( validPixROI )
         {
-            inner = cv::Rect_<float>((float)((inner.x - cx0)*s + cx),
-                                     (float)((inner.y - cy0)*s + cy),
-                                     (float)(inner.width*s),
-                                     (float)(inner.height*s));
+            inner = cv::Rect_<double>((double)((inner.x - cx0)*s + cx),
+                                      (double)((inner.y - cy0)*s + cy),
+                                      (double)(inner.width*s),
+                                      (double)(inner.height*s));
             cv::Rect r(cvCeil(inner.x), cvCeil(inner.y), cvFloor(inner.width), cvFloor(inner.height));
             r &= cv::Rect(0, 0, newImgSize.width, newImgSize.height);
             *validPixROI = cvRect(r);
