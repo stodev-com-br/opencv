@@ -86,12 +86,25 @@ public:
     int getTensorShapeSize(int node_id, int node_input_id) {
         const auto node = getNode(node_id);
         const auto &input_name = node->getInputName(node_input_id);
+        // try to get from value_info
         for (int i = 0; i < net.value_info_size(); i++) {
             const auto value_info = net.value_info(i);
             if (value_info.name() == input_name) {
                 if (value_info.has_type() && value_info.type().has_tensor_type() &&
                     value_info.type().tensor_type().has_shape()) {
                     return value_info.type().tensor_type().shape().dim_size();
+                } else {
+                    return -1;
+                }
+            }
+        }
+        // try to get from input
+        for (int i = 0; i < net.input_size(); i++) {
+            const auto input = net.input(i);
+            if (input.name() == input_name) {
+                if (input.has_type() && input.type().has_tensor_type() &&
+                    input.type().tensor_type().has_shape()) {
+                    return input.type().tensor_type().shape().dim_size();
                 } else {
                     return -1;
                 }
@@ -229,6 +242,115 @@ class AdjustSliceAllOptionalInputsSubgraph : public Subgraph {
     size_t num_inputs_;
 };
 
+/* Fusion for biased MatMul.
+
+   Graph before fusion: [Input] -> MatMul -> Add -> [Output]
+
+   Graph after fusion:  [Input] -> MatMul -> [Output]
+                                     \
+                                     bias
+*/
+
+class BiasedMatmulSubgraph : public Subgraph {
+ public:
+    BiasedMatmulSubgraph() {
+        int input = addNodeToMatch("");
+        matmul_id = addNodeToMatch("MatMul", input, addNodeToMatch(""));
+        add_id = addNodeToMatch("Add", addNodeToMatch(""), matmul_id);
+
+        setFusedNode("MatMul", input);
+    }
+
+    virtual bool match(const Ptr<ImportGraphWrapper>& net, int nodeId,
+                       std::vector<int>& matchedNodesIds) CV_OVERRIDE {
+        if (Subgraph::match(net, nodeId, matchedNodesIds)) {
+            auto onnx_net = net.dynamicCast<ONNXGraphWrapper>();
+
+            // get input weight from MatMul
+            {
+                // make sure that input A is not Constant
+                if (onnx_net->getInputInitializerId(matchedNodesIds[matmul_id], 0) >= 0) {
+                    return false;
+                } else {
+                    const Ptr<ImportNodeWrapper> node = net->getNode(matchedNodesIds[matmul_id]);
+
+                    int constant_id = Subgraph::getInputNodeId(net, node, 0);
+                    auto constant_node = net->getNode(constant_id);
+                    if (constant_node->getType() == "Constant") {
+                        return false;
+                    }
+                }
+
+                bool is_weight_const = false;
+                int initializer_id = onnx_net->getInputInitializerId(matchedNodesIds[matmul_id], 1);
+                if (initializer_id != -1) { // Initializer
+                    weight_name = onnx_net->getNameOfInitializer(initializer_id);
+                    is_weight_const = true;
+                } else { // Constant layer
+                    const Ptr<ImportNodeWrapper> node = net->getNode(matchedNodesIds[matmul_id]);
+
+                    int constant_id = Subgraph::getInputNodeId(net, node, 1);
+                    auto constant_node = net->getNode(constant_id);
+                    if (constant_node->getType() == "Constant") {
+                        weight_name = node->getInputName(1);
+                        is_weight_const = true;
+                    }
+                }
+
+                if (!is_weight_const) {
+                    return false;
+                }
+            }
+
+            // get input bias from Add
+            {
+                bool is_bias_const = false;
+                int initializer_id = std::max(onnx_net->getInputInitializerId(matchedNodesIds[add_id], 0),
+                                              onnx_net->getInputInitializerId(matchedNodesIds[add_id], 1));
+                if (initializer_id != -1) {
+                    bias_name = onnx_net->getNameOfInitializer(initializer_id);
+                    is_bias_const = true;
+                } else { // Constant layer
+                    const Ptr<ImportNodeWrapper> node = net->getNode(matchedNodesIds[add_id]);
+
+                    int constant_id = Subgraph::getInputNodeId(net, node, 0);
+                    auto constant_node = net->getNode(constant_id);
+                    if (constant_node->getType() == "Constant") {
+                        bias_name = node->getInputName(0);
+                        is_bias_const = true;
+                    } else {
+                        constant_id = Subgraph::getInputNodeId(net, node, 1);
+                        constant_node = net->getNode(constant_id);
+                        if (constant_node->getType() == "Constant") {
+                            bias_name = node->getInputName(1);
+                            is_bias_const = true;
+                        }
+                    }
+                }
+                if (!is_bias_const) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+        return false;
+    }
+
+    virtual void finalize(const Ptr<ImportGraphWrapper>& net,
+                          const Ptr<ImportNodeWrapper>& fusedNode,
+                          std::vector<Ptr<ImportNodeWrapper> >&) CV_OVERRIDE {
+        opencv_onnx::NodeProto* node = fusedNode.dynamicCast<ONNXNodeWrapper>()->node;
+        // add inputs
+        node->add_input(weight_name);
+        node->add_input(bias_name);
+    }
+
+ private:
+    int matmul_id, add_id;
+    std::string weight_name, bias_name;
+};
+
 /*  The fusion for the multi-head attention from vision transformer.
 
     Abbreviations:
@@ -309,22 +431,21 @@ class AttentionSubGraph : public Subgraph {
     AttentionSubGraph() {
         int input = addNodeToMatch("");
         int transpose = addNodeToMatch("Transpose", input); // tranpose does not make any differences to the accuracy here in this subgraph
-        att_matmul = addNodeToMatch("MatMul", transpose, addNodeToMatch(""));
-        att_add = addNodeToMatch("Add", addNodeToMatch(""), att_matmul);
+        att_matmul = addNodeToMatch("MatMul", transpose, addNodeToMatch(""), addNodeToMatch("")); // add is fused into matmul via BiasedMatMulSubgraph
 
         // v_path
-        slice_v = addNodeToMatch("Slice", std::vector<int>{att_add, addNodeToMatch(""), addNodeToMatch(""), addNodeToMatch(""), addNodeToMatch("")});
+        slice_v = addNodeToMatch("Slice", std::vector<int>{att_matmul, addNodeToMatch(""), addNodeToMatch(""), addNodeToMatch(""), addNodeToMatch("")});
         int reshape_v = addNodeToMatch("Reshape", slice_v, addNodeToMatch(""));
         int transpose_v = addNodeToMatch("Transpose", reshape_v);
 
         // q_path
-        slice_q = addNodeToMatch("Slice", std::vector<int>{att_add, addNodeToMatch(""), addNodeToMatch(""), addNodeToMatch(""), addNodeToMatch("")});
+        slice_q = addNodeToMatch("Slice", std::vector<int>{att_matmul, addNodeToMatch(""), addNodeToMatch(""), addNodeToMatch(""), addNodeToMatch("")});
         reshape_q = addNodeToMatch("Reshape", slice_q, addNodeToMatch(""));
         int transpose_q = addNodeToMatch("Transpose", reshape_q);
         div_q = addNodeToMatch("Div", transpose_q, addNodeToMatch(""));
 
         // k_path
-        slice_k = addNodeToMatch("Slice", std::vector<int>{att_add, addNodeToMatch(""), addNodeToMatch(""), addNodeToMatch(""), addNodeToMatch("")});
+        slice_k = addNodeToMatch("Slice", std::vector<int>{att_matmul, addNodeToMatch(""), addNodeToMatch(""), addNodeToMatch(""), addNodeToMatch("")});
         int reshape_k = addNodeToMatch("Reshape", slice_k, addNodeToMatch(""));
         int transpose_k = addNodeToMatch("Transpose", reshape_k);
 
@@ -367,7 +488,7 @@ class AttentionSubGraph : public Subgraph {
 
             // get names
             weight_name = getInputName(net, matchedNodesIds[att_matmul], 1);
-            bias_name = getInputName(net, matchedNodesIds[att_add], 0);
+            bias_name = getInputName(net, matchedNodesIds[att_matmul], 2);
             return true;
         }
         return false;
@@ -401,7 +522,7 @@ class AttentionSubGraph : public Subgraph {
     }
 
  private:
-    int att_matmul, att_add;
+    int att_matmul;
     int slice_q, slice_k, slice_v;
     int reshape_q, div_q, last_reshape;
 
@@ -423,20 +544,19 @@ class AttentionSingleHeadSubGraph : public Subgraph {
     AttentionSingleHeadSubGraph() {
         int input = addNodeToMatch("");
         int transpose = addNodeToMatch("Transpose", input); // tranpose does not make any differences to the accuracy here in this subgraph
-        att_matmul = addNodeToMatch("MatMul", transpose, addNodeToMatch(""));
-        att_add = addNodeToMatch("Add", addNodeToMatch(""), att_matmul);
+        att_matmul = addNodeToMatch("MatMul", transpose, addNodeToMatch(""), addNodeToMatch("")); // add is fused into matmul via BiasedMatMulSubgraph
 
         // v_path
-        slice_v = addNodeToMatch("Slice", std::vector<int>{att_add, addNodeToMatch(""), addNodeToMatch(""), addNodeToMatch(""), addNodeToMatch("")});
+        slice_v = addNodeToMatch("Slice", std::vector<int>{att_matmul, addNodeToMatch(""), addNodeToMatch(""), addNodeToMatch(""), addNodeToMatch("")});
         int transpose_v = addNodeToMatch("Transpose", slice_v);
 
         // q_path
-        slice_q = addNodeToMatch("Slice", std::vector<int>{att_add, addNodeToMatch(""), addNodeToMatch(""), addNodeToMatch(""), addNodeToMatch("")});
+        slice_q = addNodeToMatch("Slice", std::vector<int>{att_matmul, addNodeToMatch(""), addNodeToMatch(""), addNodeToMatch(""), addNodeToMatch("")});
         int transpose_q = addNodeToMatch("Transpose", slice_q);
         div_q = addNodeToMatch("Div", transpose_q, addNodeToMatch(""));
 
         // k_path
-        slice_k = addNodeToMatch("Slice", std::vector<int>{att_add, addNodeToMatch(""), addNodeToMatch(""), addNodeToMatch(""), addNodeToMatch("")});
+        slice_k = addNodeToMatch("Slice", std::vector<int>{att_matmul, addNodeToMatch(""), addNodeToMatch(""), addNodeToMatch(""), addNodeToMatch("")});
         int transpose_k = addNodeToMatch("Transpose", slice_k);
 
         // qk
@@ -478,7 +598,7 @@ class AttentionSingleHeadSubGraph : public Subgraph {
 
             // get names
             weight_name = getInputName(net, matchedNodesIds[att_matmul], 1);
-            bias_name = getInputName(net, matchedNodesIds[att_add], 0);
+            bias_name = getInputName(net, matchedNodesIds[att_matmul], 2);
             return true;
         }
         return false;
@@ -512,7 +632,7 @@ class AttentionSingleHeadSubGraph : public Subgraph {
     }
 
  protected:
-    int att_matmul, att_add;
+    int att_matmul;
     int slice_q, slice_k, slice_v;
     int div_q, last_reshape;
 
@@ -660,6 +780,10 @@ private:
         [Input] -> LayerNorm -> [Output]
                         \
                     [weight], [bias]
+
+    Note: axes of ReduceMean must be:
+          - last element is the axis of last dimension (-1 or (input_ndims - 1))
+          - a list of adjacent axes, e.g. [1, 2, 3, ..., input_ndims - 1]
 */
 class LayerNormSubGraph : public Subgraph
 {
@@ -683,19 +807,22 @@ public:
         setFusedNode("LayerNormalization", input);
     }
 
-    static float extractAxis(const Ptr<ImportGraphWrapper>& net, int node_id)
+    static std::vector<int64_t> extractAxis(const Ptr<ImportGraphWrapper>& net, int node_id)
     {
+        // TODO: consider ReduceMean-18 which has axes as one of the inputs instead of attributes
         Ptr<ImportNodeWrapper> mean_ptr = net->getNode(node_id);
         opencv_onnx::NodeProto* mean_node = mean_ptr.dynamicCast<ONNXNodeWrapper>()->node;
-        int axis_ = -1;
+        std::vector<int64_t> axes;
         for (int i = 0; i < mean_node->attribute_size(); i++)
         {
             opencv_onnx::AttributeProto attr = mean_node->attribute(i);
             if (attr.name() != "axes")
                 continue;
-            axis_ = static_cast<int>(attr.ints(0));
+            for (int j = 0; j < attr.ints_size(); j++) {
+                axes.push_back(attr.ints(j));
+            }
         }
-        return axis_;
+        return axes;
     }
 
     virtual bool match(const Ptr<ImportGraphWrapper>& net, int nodeId,
@@ -707,11 +834,31 @@ public:
             if (pow_exp - 2 > 1e-5) // not pow(2)
                 return false;
 
-            int axis_mean1 = extractAxis(net, matchedNodesIds[mean]);
-            int axis_mean2 = extractAxis(net, matchedNodesIds[mean1]);
-            if (axis_mean1 != axis_mean2)
+            std::vector<int64_t> axes = extractAxis(net, matchedNodesIds[mean]);
+            // check whether it is -1 or last_axis or [axis, ..., last_axis]
+            int64_t input_ndims = static_cast<int64_t>(net.dynamicCast<ONNXGraphWrapper>()->getTensorShapeSize(matchedNodesIds[mean], 0));
+            if (input_ndims == -1) {
+                return false; // input shape unknown
+            }
+            // assume that axes are sorted in ascending order, e.g. [0, 1, 2, 3] or [-3, -2, -1]
+            if (axes.back() != -1 && axes.back() != (input_ndims - 1)) {
                 return false;
-            axis = axis_mean1;
+            }
+            for (size_t i = 0; i < axes.size() - 1; i++) {
+                if (axes[i] - axes[i + 1] != -1) {
+                    return false;
+                }
+            }
+
+            std::vector<int64_t> axes1 = extractAxis(net, matchedNodesIds[mean1]);
+            if (axes.size() != axes1.size())
+                return false;
+            for (size_t i = 0; i < axes.size(); i++) {
+                if (((axes[i] + input_ndims) % input_ndims) != ((axes1[i] + input_ndims) % input_ndims)) {
+                    return false;
+                }
+            }
+            axis = axes[0];
 
             epsilon = extractConstant(net, matchedNodesIds[add], 1).at<float>(0);
 
@@ -1518,6 +1665,7 @@ public:
 void simplifySubgraphs(opencv_onnx::GraphProto& net)
 {
     std::vector<Ptr<Subgraph> > subgraphs;
+    subgraphs.push_back(makePtr<BiasedMatmulSubgraph>());
     subgraphs.push_back(makePtr<AdjustSliceAllOptionalInputsSubgraph>(3));
     subgraphs.push_back(makePtr<AdjustSliceAllOptionalInputsSubgraph>(4));
     subgraphs.push_back(makePtr<GeluSubGraph>());
@@ -1594,12 +1742,12 @@ Mat getMatFromTensor(const opencv_onnx::TensorProto& tensor_proto)
 #endif
             const ::google::protobuf::RepeatedField<int32_t> field = tensor_proto.int32_data();
 
-            AutoBuffer<float16_t, 16> aligned_val;
+            AutoBuffer<hfloat, 16> aligned_val;
             size_t sz = tensor_proto.int32_data().size();
             aligned_val.allocate(sz);
-            float16_t* bufPtr = aligned_val.data();
+            hfloat* bufPtr = aligned_val.data();
 
-            float16_t *fp16Ptr = (float16_t *)field.data();
+            hfloat *fp16Ptr = (hfloat *)field.data();
             for (int i = 0; i < sz; i++)
             {
                 bufPtr[i] = fp16Ptr[i*2 + offset];
@@ -1611,11 +1759,11 @@ Mat getMatFromTensor(const opencv_onnx::TensorProto& tensor_proto)
             char* val = const_cast<char*>(tensor_proto.raw_data().c_str());
 #if CV_STRONG_ALIGNMENT
             // Aligned pointer is required.
-            AutoBuffer<float16_t, 16> aligned_val;
-            if (!isAligned<sizeof(float16_t)>(val))
+            AutoBuffer<hfloat, 16> aligned_val;
+            if (!isAligned<sizeof(hfloat)>(val))
             {
                 size_t sz = tensor_proto.raw_data().size();
-                aligned_val.allocate(divUp(sz, sizeof(float16_t)));
+                aligned_val.allocate(divUp(sz, sizeof(hfloat)));
                 memcpy(aligned_val.data(), val, sz);
                 val = (char*)aligned_val.data();
             }
