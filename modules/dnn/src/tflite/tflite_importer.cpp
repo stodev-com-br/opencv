@@ -71,6 +71,7 @@ private:
     void parseSoftmax(const Operator& op, const std::string& opcode, LayerParams& layerParams);
     void parseCast(const Operator& op, const std::string& opcode, LayerParams& layerParams);
     void parseTranspose(const Operator& op, const std::string& opcode, LayerParams& layerParams);
+    void parseGlobalPooling(const Operator& op, const std::string& opcode, LayerParams& layerParams);
 
     void parseFusedActivation(const Operator& op, ActivationFunctionType activ);
     void parseActivation(const Operator& op, const std::string& opcode, LayerParams& layerParams, bool isFused);
@@ -78,6 +79,8 @@ private:
     int addPermuteLayer(const std::vector<int>& order, const std::string& permName, const std::pair<int, int>& inpId, int dtype);
     int addReshapeLayer(const std::vector<int>& shape, int axis, int num_axes,
                         const std::string& name, const std::pair<int, int>& inpId, int dtype);
+    int addFlattenLayer(int axis, int end_axis, const std::string& name, const std::pair<int, int>& inpId, int dtype);
+
     inline bool isInt8(const Operator& op);
     inline void getQuantParams(const Operator& op, float& inpScale, int& inpZero, float& outScale, int& outZero);
 };
@@ -268,7 +271,7 @@ TFLiteImporter::DispatchMap TFLiteImporter::buildDispatchMap()
     dispatch["DEPTHWISE_CONV_2D"] = &TFLiteImporter::parseDWConvolution;
     dispatch["ADD"] = dispatch["MUL"] = &TFLiteImporter::parseEltwise;
     dispatch["RELU"] = dispatch["PRELU"] = dispatch["HARD_SWISH"] =
-        dispatch["LOGISTIC"] = &TFLiteImporter::parseActivation;
+        dispatch["LOGISTIC"] = dispatch["LEAKY_RELU"] = &TFLiteImporter::parseActivation;
     dispatch["MAX_POOL_2D"] = dispatch["AVERAGE_POOL_2D"] = &TFLiteImporter::parsePooling;
     dispatch["MaxPoolingWithArgmax2D"] = &TFLiteImporter::parsePoolingWithArgmax;
     dispatch["MaxUnpooling2D"] = &TFLiteImporter::parseUnpooling;
@@ -286,6 +289,7 @@ TFLiteImporter::DispatchMap TFLiteImporter::buildDispatchMap()
     dispatch["CAST"] = &TFLiteImporter::parseCast;
     dispatch["TFLite_Detection_PostProcess"] = &TFLiteImporter::parseDetectionPostProcess;
     dispatch["TRANSPOSE"] = &TFLiteImporter::parseTranspose;
+    dispatch["MEAN"] = dispatch["REDUCE_MAX"] = &TFLiteImporter::parseGlobalPooling;
     return dispatch;
 }
 
@@ -764,6 +768,37 @@ void TFLiteImporter::parseTranspose(const Operator& op, const std::string& opcod
     addLayer(layerParams, op);
 }
 
+void TFLiteImporter::parseGlobalPooling(const Operator& op, const std::string& opcode, LayerParams& layerParams)
+{
+    layerParams.type = "Pooling";
+    if(opcode == "MEAN") {
+        layerParams.set("pool", "ave");
+    }
+    else if (opcode == "REDUCE_MAX") {
+        layerParams.set("pool", "max");
+    }
+    else {
+        CV_Error(Error::StsNotImplemented, "Unsupported pooling " + opcode);
+    }
+    layerParams.set("global_pooling", true);
+    auto options = op.builtin_options_as_ReducerOptions();
+    bool keep_dims = options->keep_dims();
+
+    if (!keep_dims) {
+        const auto name = layerParams.name;
+        layerParams.name += "/global_pooling";
+        addLayer(layerParams, op);
+
+        int out = op.outputs()->Get(0);
+        auto outId = layerIds[out];
+        int flattenId = addFlattenLayer(1, -1, name, outId, isInt8(op) ? CV_8S : CV_32F);
+        layerIds[out] = std::make_pair(flattenId, 0);
+    }
+    else {
+        addLayer(layerParams, op);
+    }
+}
+
 int TFLiteImporter::addPermuteLayer(const std::vector<int>& order, const std::string& permName,
                                     const std::pair<int, int>& inpId, int dtype)
 {
@@ -782,6 +817,16 @@ int TFLiteImporter::addReshapeLayer(const std::vector<int>& shape, int axis, int
     lp.set("dim", DictValue::arrayInt<const int*>(shape.data(), shape.size()));
     lp.set("num_axes", num_axes);
     int id = dstNet.addLayer(name, "Reshape", dtype, lp);
+    dstNet.connect(inpId.first, inpId.second, id, 0);
+    return id;
+}
+
+int TFLiteImporter::addFlattenLayer(int axis, int end_axis, const std::string& name, const std::pair<int, int>& inpId, int dtype)
+{
+    LayerParams lp;
+    lp.set("axis", axis);
+    lp.set("end_axis", end_axis);
+    int id = dstNet.addLayer(name, "Flatten", dtype, lp);
     dstNet.connect(inpId.first, inpId.second, id, 0);
     return id;
 }
@@ -984,6 +1029,7 @@ void TFLiteImporter::parseActivation(const Operator& op, const std::string& opco
 }
 
 void TFLiteImporter::parseActivation(const Operator& op, const std::string& opcode, LayerParams& activParams, bool isFused) {
+    float slope = 0.;
     if (opcode == "NONE")
         return;
     else if (opcode == "RELU6")
@@ -996,6 +1042,13 @@ void TFLiteImporter::parseActivation(const Operator& op, const std::string& opco
         activParams.type = "HardSwish";
     else if (opcode == "LOGISTIC")
         activParams.type = "Sigmoid";
+    else if (opcode == "LEAKY_RELU")
+    {
+        activParams.type = "ReLU";
+        auto options = reinterpret_cast<const LeakyReluOptions*>(op.builtin_options());
+        slope = options->alpha();
+        activParams.set("negative_slope", slope);
+    }
     else
         CV_Error(Error::StsNotImplemented, "Unsupported activation " + opcode);
 
@@ -1027,6 +1080,8 @@ void TFLiteImporter::parseActivation(const Operator& op, const std::string& opco
                 y = 1.0f / (1.0f + std::exp(-x));
             else if (opcode == "HARD_SWISH")
                 y = x * max(0.f, min(1.f, x / 6.f + 0.5f));
+            else if (opcode == "LEAKY_RELU")
+                y = x >= 0.f ? x : slope*x;
             else
                 CV_Error(Error::StsNotImplemented, "Lookup table for " + opcode);
 
